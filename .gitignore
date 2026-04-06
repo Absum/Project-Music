@@ -1,0 +1,4 @@
+node_modules/
+dist/
+petri/node_modules/
+synth/node_modules/
