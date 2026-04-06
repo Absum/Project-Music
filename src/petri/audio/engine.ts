@@ -1,8 +1,7 @@
-import * as Tone from 'tone';
 import type { GridState, SimulationEvent, CollisionConfig, MelodyConfig, NoteDuration } from '../types.js';
-import type { SynthPreset, FxSlot } from '../../audio/presets.js';
-import { getFxDef } from '../../audio/fx-registry.js';
+import type { AudioBus } from '../../audio/bus.js';
 import { buildPitchMap } from './scales.js';
+import * as Tone from 'tone';
 
 const SPECIES_TO_PRESET = [1, 2, 0, 3]; // Oscillaris→PAD, Sawtonis→LEAD, Quadrus→BASS, Triangula→ARP
 
@@ -14,81 +13,35 @@ const DEFAULT_MELODY_CONFIG: MelodyConfig = {
   maxNotesPerSpecies: 1, masterVolume: -7,
 };
 
-interface VoiceChain {
-  synth: Tone.FMSynth;
-  filter: Tone.Filter;
-  fxNodes: Tone.ToneAudioNode[];
-  panner: Tone.Panner;
-  sendGain: Tone.Gain;
-}
-
-interface PresetSnapshot {
-  oscType: string; harmonicity: number; modulationIndex: number; modWaveform: string;
-  envelope: string; modEnvelope: string; filterCutoff: number; filterQ: number;
-  filterType: string; volume: number; spread: number; count: number;
-  effectsHash: string;
-}
-
 export class AudioEngine {
-  // 4 species voices — each with full preset chain
-  private voices: (VoiceChain | null)[] = [null, null, null, null];
+  private bus: AudioBus;
 
-  // Kick
-  private kickVoice: VoiceChain | null = null;
-
-  // Collision
+  // Collision noise (not a preset — separate sound)
   private noiseSynth!: Tone.NoiseSynth;
   private noisePanner!: Tone.Panner;
-  private lastNoiseType = 'pink';
   private noiseFilter!: Tone.Filter;
+  private lastNoiseType = 'pink';
+  private lastCollisionTime = 0;
 
-  // Master
-  private masterGain!: Tone.Gain;
-
-  // Bus
-  private busNodes: Tone.ToneAudioNode[] = [];
-  private busSendMerge!: Tone.Gain;
-  private busReturn!: Tone.Gain;
-
-  // State
+  // Playhead
   private _playheadCol = 0;
   private initialized = false;
-  private lastCollisionTime = 0;
-  private lastSnapshots: (PresetSnapshot | null)[] = [null, null, null, null];
-  private lastKickSnapshot: PresetSnapshot | null = null;
 
   // Melody config
   private melodyConfig: MelodyConfig = { ...DEFAULT_MELODY_CONFIG, speciesDuration: [...DEFAULT_MELODY_CONFIG.speciesDuration] };
   private pitchMap: string[] = buildPitchMap('C', 'minorPentatonic', 2, 5, 32);
 
-  // Sources
-  private getPresets: (() => SynthPreset[]) | null = null;
-  private getBusEffects: (() => FxSlot[]) | null = null;
-
   get playheadCol(): number { return this._playheadCol; }
 
-  setPresetSource(fn: () => SynthPreset[]): void { this.getPresets = fn; }
-  setBusSource(fn: () => FxSlot[]): void { this.getBusEffects = fn; }
-
-  setMelodyConfig(config: MelodyConfig): void {
-    this.melodyConfig = config;
-    this.pitchMap = buildPitchMap(config.rootNote, config.scaleType, config.octaveLow, config.octaveHigh, 32);
+  constructor(bus: AudioBus) {
+    this.bus = bus;
   }
 
   async start(): Promise<void> {
     if (this.initialized) return;
     await Tone.start();
 
-    const lowCut = new Tone.Filter({ frequency: 35, type: 'highpass', rolloff: -24 });
-    this.masterGain = new Tone.Gain(1.0);
-    this.masterGain.connect(lowCut);
-    lowCut.toDestination();
-    this.busReturn = new Tone.Gain(1.0);
-    this.busReturn.connect(this.masterGain);
-    this.busSendMerge = new Tone.Gain(1);
-    this.rebuildBus();
-
-    // Collision noise — connects directly to master (no preset effects)
+    // Collision noise — not a preset, connects directly to destination
     this.noisePanner = new Tone.Panner(0);
     this.noiseFilter = new Tone.Filter(4000, 'lowpass');
     this.noiseSynth = new Tone.NoiseSynth({
@@ -98,11 +51,14 @@ export class AudioEngine {
     });
     this.noiseSynth.connect(this.noiseFilter);
     this.noiseFilter.connect(this.noisePanner);
-    this.noisePanner.connect(this.masterGain);
+    this.noisePanner.toDestination();
 
-    // Build initial voices
-    this.rebuildAllVoices();
     this.initialized = true;
+  }
+
+  setMelodyConfig(config: MelodyConfig): void {
+    this.melodyConfig = config;
+    this.pitchMap = buildPitchMap(config.rootNote, config.scaleType, config.octaveLow, config.octaveHigh, 32);
   }
 
   syncCollisionConfig(c: CollisionConfig): void {
@@ -143,10 +99,7 @@ export class AudioEngine {
   updateOrganisms(grid: GridState): void {
     if (!this.initialized) return;
 
-    this.syncFromPresets();
-
     const col = this._playheadCol;
-    const now = Tone.now();
     const gw = grid.width;
 
     // Scan current column
@@ -161,15 +114,13 @@ export class AudioEngine {
     for (let y = 0; y < grid.height; y++) {
       for (let x = 0; x < gw; x++) { if (grid.cells[y][x].organism) totalOrgs++; }
     }
-    if (totalOrgs > 0 && this.kickVoice && col % this.melodyConfig.kickDensity === 0) {
-      this.kickVoice.synth.triggerAttackRelease(this.melodyConfig.kickPitch, '8n', now);
+    if (totalOrgs > 0 && col % this.melodyConfig.kickDensity === 0) {
+      this.bus.play(4, this.melodyConfig.kickPitch, '8n');
     }
 
     // Spatial panning from species centroid
     const gh = grid.height;
     for (let s = 0; s < 4; s++) {
-      const voice = this.voices[s];
-      if (!voice) continue;
       let cx = 0, count = 0;
       for (let y = 0; y < gh; y++) {
         for (let x = 0; x < gw; x++) {
@@ -177,10 +128,13 @@ export class AudioEngine {
           if (org && org.species === s) { cx += x; count++; }
         }
       }
-      if (count > 0) voice.panner.pan.rampTo((cx / count / gw) * 2 - 1, 0.15);
+      if (count > 0) {
+        const pan = (cx / count / gw) * 2 - 1;
+        this.bus.setChannelPan(SPECIES_TO_PRESET[s], pan);
+      }
     }
 
-    // Play notes from this column
+    // Play notes
     if (hits.length > 0) {
       const bySpecies: Map<number, { row: number; energy: number }[]> = new Map();
       for (const hit of hits) {
@@ -189,16 +143,13 @@ export class AudioEngine {
         bySpecies.set(hit.species, list);
       }
 
-      let offset = 0;
       for (const [species, orgHits] of bySpecies) {
-        const voice = this.voices[species];
-        if (!voice) continue;
+        const presetIdx = SPECIES_TO_PRESET[species];
         const sorted = orgHits.sort((a, b) => b.energy - a.energy).slice(0, this.melodyConfig.maxNotesPerSpecies);
         for (const hit of sorted) {
           const pitch = this.rowToPitch(hit.row, grid.height);
           const duration = this.melodyConfig.speciesDuration[species] as NoteDuration;
-          voice.synth.triggerAttackRelease(pitch, duration, now + offset * 0.015);
-          offset++;
+          this.bus.play(presetIdx, pitch, duration);
         }
       }
     }
@@ -211,191 +162,9 @@ export class AudioEngine {
     return this.pitchMap[Math.min(index, this.pitchMap.length - 1)];
   }
 
-  // --- Build voices from presets ---
-
-  private rebuildAllVoices(): void {
-    for (let i = 0; i < 4; i++) this.rebuildVoice(i);
-    this.rebuildKick();
-  }
-
-  private rebuildVoice(species: number): void {
-    // Dispose old
-    const old = this.voices[species];
-    if (old) {
-      old.synth.dispose(); old.filter.dispose(); old.panner.dispose(); old.sendGain.dispose();
-      for (const n of old.fxNodes) n.dispose();
-    }
-
-    const preset = this.getPresetForSpecies(species);
-    if (!preset) { this.voices[species] = null; return; }
-
-    const { synth, filter, fxNodes } = this.buildSynthFromPreset(preset);
-    const panner = new Tone.Panner(0);
-    const sendGain = new Tone.Gain(preset.busSend ?? 0);
-
-    let prev: Tone.ToneAudioNode = filter;
-    for (const node of fxNodes) { prev.connect(node); prev = node; }
-    prev.connect(panner);
-    prev.connect(sendGain);
-    panner.connect(this.masterGain);
-    sendGain.connect(this.busSendMerge);
-
-    this.voices[species] = { synth, filter, fxNodes, panner, sendGain };
-    this.lastSnapshots[species] = this.takeSnapshot(preset);
-  }
-
-  private rebuildKick(): void {
-    if (this.kickVoice) {
-      this.kickVoice.synth.dispose(); this.kickVoice.filter.dispose();
-      this.kickVoice.panner.dispose(); this.kickVoice.sendGain.dispose();
-      for (const n of this.kickVoice.fxNodes) n.dispose();
-    }
-
-    const preset = this.getPresets ? this.getPresets()[4] : null;
-    if (!preset) { this.kickVoice = null; return; }
-
-    const { synth, filter, fxNodes } = this.buildSynthFromPreset(preset);
-    const panner = new Tone.Panner(0);
-    const sendGain = new Tone.Gain(preset.busSend ?? 0);
-
-    let prev: Tone.ToneAudioNode = filter;
-    for (const node of fxNodes) { prev.connect(node); prev = node; }
-    prev.connect(panner);
-    prev.connect(sendGain);
-    panner.connect(this.masterGain);
-    sendGain.connect(this.busSendMerge);
-
-    this.kickVoice = { synth, filter, fxNodes, panner, sendGain };
-    this.lastKickSnapshot = this.takeSnapshot(preset);
-  }
-
-  private buildSynthFromPreset(p: SynthPreset): { synth: Tone.FMSynth; filter: Tone.Filter; fxNodes: Tone.ToneAudioNode[] } {
-    const filter = new Tone.Filter({
-      frequency: p.filterCutoff,
-      type: (p.filterType ?? 'lowpass') as BiquadFilterType,
-      Q: p.filterQ ?? 1,
-      rolloff: (p.filterRolloff ?? -12) as Tone.FilterRollOff,
-    });
-
-    const isFat = p.oscType?.startsWith('fat');
-    const oscOptions: Record<string, unknown> = { type: p.oscType ?? 'sine' };
-    if (isFat) { oscOptions.spread = p.spread; oscOptions.count = p.count; }
-
-    const synth = new Tone.FMSynth({
-      harmonicity: p.harmonicity ?? 1,
-      modulationIndex: p.modulationIndex ?? 2,
-      oscillator: oscOptions as Tone.FMSynthOptions['oscillator'],
-      modulation: { type: (p.modWaveform ?? 'sine') as OscillatorType } as Tone.FMSynthOptions['modulation'],
-      envelope: p.envelope,
-      modulationEnvelope: p.modEnvelope ?? p.envelope,
-      volume: p.volume ?? -16,
-    });
-    synth.connect(filter);
-
-    // Build preset's effect chain
-    const fxNodes: Tone.ToneAudioNode[] = [];
-    if (p.effects) {
-      for (const slot of p.effects) {
-        if (!slot.enabled) continue;
-        const def = getFxDef(slot.type);
-        if (!def) continue;
-        fxNodes.push(def.create(slot.params));
-      }
-    }
-
-    return { synth, filter, fxNodes };
-  }
-
-  // --- Bus ---
-
-  private rebuildBus(): void {
-    for (const node of this.busNodes) { node.disconnect(); node.dispose(); }
-    this.busNodes = [];
-    this.busSendMerge.disconnect();
-
-    let prev: Tone.ToneAudioNode = this.busSendMerge;
-    const busEffects = this.getBusEffects?.() ?? [];
-    for (const slot of busEffects) {
-      if (!slot.enabled) continue;
-      const def = getFxDef(slot.type);
-      if (!def) continue;
-      const node = def.create(slot.params);
-      this.busNodes.push(node);
-      prev.connect(node);
-      prev = node;
-    }
-    prev.connect(this.busReturn);
-  }
-
-  // --- Preset sync ---
-
-  private getPresetForSpecies(species: number): SynthPreset | null {
-    if (!this.getPresets) return null;
-    return this.getPresets()[SPECIES_TO_PRESET[species]] ?? null;
-  }
-
-  private takeSnapshot(p: SynthPreset): PresetSnapshot {
-    return {
-      oscType: p.oscType, harmonicity: p.harmonicity, modulationIndex: p.modulationIndex,
-      modWaveform: p.modWaveform, envelope: JSON.stringify(p.envelope),
-      modEnvelope: JSON.stringify(p.modEnvelope), filterCutoff: p.filterCutoff,
-      filterQ: p.filterQ, filterType: p.filterType, volume: p.volume,
-      spread: p.spread, count: p.count,
-      effectsHash: JSON.stringify(p.effects),
-    };
-  }
-
-  private snapshotChanged(a: PresetSnapshot | null, b: PresetSnapshot): boolean {
-    if (!a) return true;
-    return a.oscType !== b.oscType || a.harmonicity !== b.harmonicity ||
-      a.modulationIndex !== b.modulationIndex || a.modWaveform !== b.modWaveform ||
-      a.envelope !== b.envelope || a.modEnvelope !== b.modEnvelope ||
-      a.filterCutoff !== b.filterCutoff || a.filterQ !== b.filterQ ||
-      a.filterType !== b.filterType || a.volume !== b.volume ||
-      a.spread !== b.spread || a.count !== b.count ||
-      a.effectsHash !== b.effectsHash;
-  }
-
-  private syncFromPresets(): void {
-    for (let i = 0; i < 4; i++) {
-      const p = this.getPresetForSpecies(i);
-      if (!p) continue;
-      const snap = this.takeSnapshot(p);
-      if (this.snapshotChanged(this.lastSnapshots[i], snap)) {
-        // Any change → full rebuild (effects chain may have changed)
-        this.rebuildVoice(i);
-      }
-    }
-
-    // Kick
-    if (this.getPresets) {
-      const kickPreset = this.getPresets()[4];
-      if (kickPreset) {
-        const snap = this.takeSnapshot(kickPreset);
-        if (this.snapshotChanged(this.lastKickSnapshot, snap)) {
-          this.rebuildKick();
-        }
-      }
-    }
-  }
-
   dispose(): void {
-    for (const v of this.voices) {
-      if (!v) continue;
-      v.synth.dispose(); v.filter.dispose(); v.panner.dispose(); v.sendGain.dispose();
-      for (const n of v.fxNodes) n.dispose();
-    }
-    if (this.kickVoice) {
-      this.kickVoice.synth.dispose(); this.kickVoice.filter.dispose();
-      this.kickVoice.panner.dispose(); this.kickVoice.sendGain.dispose();
-      for (const n of this.kickVoice.fxNodes) n.dispose();
-    }
     this.noiseSynth?.dispose();
     this.noiseFilter?.dispose();
     this.noisePanner?.dispose();
-    for (const n of this.busNodes) n.dispose();
-    this.busSendMerge?.dispose();
-    this.busReturn?.dispose();
-    this.masterGain?.dispose();
   }
 }

@@ -156,6 +156,7 @@ export class TidesRenderer {
   private camera!: THREE.PerspectiveCamera;
   private waveMaterial!: THREE.ShaderMaterial;
   private auroraMaterial!: THREE.ShaderMaterial;
+  private cameraAngle = 0;
 
   private spectrum!: SpectrumAnalyser;
 
@@ -176,10 +177,11 @@ export class TidesRenderer {
 
     this.scene = new THREE.Scene();
 
-    // Camera: sitting on the beach, waves coming at you
+    // Camera: above the water, looking toward horizon
     this.camera = new THREE.PerspectiveCamera(55, w / h, 0.1, 500);
     this.camera.position.set(0, 1.2, 4);
     this.camera.lookAt(0, 0, -2);
+    this.cameraAngle = 0;
 
     // ── Aurora sky dome ──
     const skyGeo = new THREE.SphereGeometry(200, 32, 32);
@@ -207,7 +209,7 @@ export class TidesRenderer {
     this.scene.add(glow);
 
     // ── Ocean mesh ──
-    const planeGeo = new THREE.PlaneGeometry(30, 20, 200, 200);
+    const planeGeo = new THREE.PlaneGeometry(100, 100, 200, 200);
     planeGeo.rotateX(-Math.PI / 2);
 
     this.waveMaterial = new THREE.ShaderMaterial({
@@ -269,6 +271,17 @@ export class TidesRenderer {
 
     // Update aurora time
     this.auroraMaterial.uniforms.uTime.value = state.time;
+
+    // Slow camera orbit — stays at fixed height, always looking at water
+    this.cameraAngle += 0.0008;
+    const camDist = 5;
+    const camHeight = 1.3;
+    this.camera.position.set(
+      Math.sin(this.cameraAngle) * camDist,
+      camHeight,
+      Math.cos(this.cameraAngle) * camDist,
+    );
+    this.camera.lookAt(0, -0.2, 0);
 
     this.renderer.render(this.scene, this.camera);
 

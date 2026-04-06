@@ -43,9 +43,13 @@ export function addDropdown(parent: HTMLElement, label: string, options: string[
 
 // --- Preset selector ---
 
+// Display order: KICK first, then BASS, PAD, LEAD, ARP
+const PRESET_DISPLAY_ORDER = [4, 0, 1, 2, 3];
+
 export function buildPresetSelector(container: HTMLElement, engine: SynthEngine, onPresetChange: () => void): void {
   container.innerHTML = '';
-  PRESETS.forEach((preset, i) => {
+  for (const i of PRESET_DISPLAY_ORDER) {
+    const preset = PRESETS[i];
     const btn = document.createElement('button');
     btn.className = 'preset-btn';
     if (i === engine.getPresetIndex()) btn.classList.add('active');
@@ -57,7 +61,7 @@ export function buildPresetSelector(container: HTMLElement, engine: SynthEngine,
       onPresetChange();
     });
     container.appendChild(btn);
-  });
+  }
 }
 
 // --- Synth panel (two columns) ---
