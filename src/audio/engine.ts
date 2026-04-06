@@ -36,8 +36,8 @@ export class SynthEngine {
     if (this.initialized) return;
     await Tone.start();
     this.analyser = new Tone.Analyser('waveform', 256);
-    this.masterGain = new Tone.Gain(0.8);
-    this.busReturn = new Tone.Gain(0.6);
+    this.masterGain = new Tone.Gain(1.0);
+    this.busReturn = new Tone.Gain(1.0);
     this.sendGain = new Tone.Gain(this.preset.busSend ?? 0);
     this.masterGain.connect(this.analyser);
     this.busReturn.connect(this.analyser);

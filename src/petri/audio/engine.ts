@@ -73,15 +73,14 @@ export class AudioEngine {
   setMelodyConfig(config: MelodyConfig): void {
     this.melodyConfig = config;
     this.pitchMap = buildPitchMap(config.rootNote, config.scaleType, config.octaveLow, config.octaveHigh, 32);
-    if (this.masterGain) this.masterGain.gain.rampTo(Tone.dbToGain(config.masterVolume), 0.1);
   }
 
   async start(): Promise<void> {
     if (this.initialized) return;
     await Tone.start();
 
-    this.masterGain = new Tone.Gain(0.5).toDestination();
-    this.busReturn = new Tone.Gain(0.6);
+    this.masterGain = new Tone.Gain(1.0).toDestination();
+    this.busReturn = new Tone.Gain(1.0);
     this.busReturn.connect(this.masterGain);
     this.busSendMerge = new Tone.Gain(1);
     this.rebuildBus();

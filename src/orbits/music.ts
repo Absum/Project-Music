@@ -41,11 +41,19 @@ interface VoiceChain {
   sendGain: Tone.Gain;
 }
 
+// Per-body musical state
+interface BodyMusicState {
+  lastNoteIndex: number;    // melodic memory — index within chord notes
+  cooldown: number;         // call-and-response cooldown ticks
+  euclideanK: number;       // mutable copy for evolution
+  euclideanN: number;
+  mutateTimer: number;      // ticks until next Euclidean mutation
+}
+
 export class OrbitsMusic {
   private voices: Map<number, VoiceChain> = new Map();
   private masterGain!: Tone.Gain;
 
-  // Shared bus (reads from synth engine's bus config)
   private busNodes: Tone.ToneAudioNode[] = [];
   private busSendMerge!: Tone.Gain;
   private busReturn!: Tone.Gain;
@@ -59,6 +67,13 @@ export class OrbitsMusic {
   private chordTimer = 0;
   private chordInterval = 32;
   private initialized = false;
+  private tickCount = 0;
+
+  // Per-body musical state
+  private bodyStates: Map<number, BodyMusicState> = new Map();
+
+  // Call-and-response: global cooldown after any body plays
+  private globalCooldown = 0;
 
   private getPresets: (() => SynthPreset[]) | null = null;
   private getBusEffects: (() => FxSlot[]) | null = null;
@@ -69,42 +84,112 @@ export class OrbitsMusic {
   async start(): Promise<void> {
     if (this.initialized) return;
     await Tone.start();
-
-    this.masterGain = new Tone.Gain(0.5).toDestination();
-    this.busReturn = new Tone.Gain(0.6);
+    this.masterGain = new Tone.Gain(1.0).toDestination();
+    this.busReturn = new Tone.Gain(1.0);
     this.busReturn.connect(this.masterGain);
     this.busSendMerge = new Tone.Gain(1);
     this.rebuildBus();
-
     this.kickPanner = new Tone.Panner(0);
-
     this.initialized = true;
+  }
+
+  private getBodyState(body: Body): BodyMusicState {
+    let s = this.bodyStates.get(body.id);
+    if (!s) {
+      s = {
+        lastNoteIndex: 0,
+        cooldown: 0,
+        euclideanK: body.euclideanK,
+        euclideanN: body.euclideanN,
+        mutateTimer: 40 + Math.floor(Math.random() * 40), // 40-80 ticks between mutations
+      };
+      this.bodyStates.set(body.id, s);
+    }
+    return s;
   }
 
   tick(state: OrbitsState, bpm: number): void {
     if (!this.initialized) return;
+    this.tickCount++;
 
     const now = Tone.now();
 
-    // Chord progression
+    // --- 1. Chord progression responds to body proximity ---
     this.chordTimer++;
+
+    // Find closest pair distance
+    let minDist = Infinity;
+    for (let i = 1; i < state.bodies.length; i++) {
+      for (let j = i + 1; j < state.bodies.length; j++) {
+        const a = state.bodies[i], b = state.bodies[j];
+        const d = Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2 + (a.z - b.z) ** 2);
+        if (d < minDist) minDist = d;
+      }
+    }
+    // Closer bodies = faster chord changes (interval 16-48)
+    const proximityFactor = Math.max(0, 1 - minDist / 400); // 0 = far, 1 = close
+    this.chordInterval = Math.round(48 - proximityFactor * 32); // 16-48
+
     if (this.chordTimer >= this.chordInterval) {
       this.chordTimer = 0;
       this.currentChord = nextChord(this.currentChord);
     }
 
-    // Process each body (skip center)
+    // Resonance can also trigger early chord change
+    for (let i = 1; i < state.bodies.length; i++) {
+      for (let j = i + 1; j < state.bodies.length; j++) {
+        const res = getResonance(state.bodies[i], state.bodies[j]);
+        if (res > 0.85 && this.chordTimer > this.chordInterval * 0.6) {
+          this.chordTimer = this.chordInterval;
+        }
+      }
+    }
+
+    // --- 6. Call-and-response: decay global cooldown ---
+    if (this.globalCooldown > 0) this.globalCooldown--;
+
+    // --- Process each body ---
     for (const body of state.bodies) {
       if (body.role === 'center') continue;
+
+      const bs = this.getBodyState(body);
+
+      // --- 2. Euclidean pattern evolution ---
+      bs.mutateTimer--;
+      if (bs.mutateTimer <= 0) {
+        // Mutate K or N slightly
+        if (Math.random() < 0.5) {
+          bs.euclideanK = Math.max(1, Math.min(bs.euclideanN - 1, bs.euclideanK + (Math.random() < 0.5 ? 1 : -1)));
+        } else {
+          bs.euclideanN = Math.max(bs.euclideanK + 1, Math.min(16, bs.euclideanN + (Math.random() < 0.5 ? 1 : -1)));
+        }
+        bs.mutateTimer = 30 + Math.floor(Math.random() * 50); // next mutation in 30-80 ticks
+      }
+
+      // Phase advance
       body.phase += 1 / body.loopBeats;
       if (body.phase >= 1) body.phase -= 1;
 
-      const step = Math.floor(body.phase * body.euclideanN);
-      const pattern = euclidean(body.euclideanK, body.euclideanN);
+      const step = Math.floor(body.phase * bs.euclideanN);
+      const pattern = euclidean(bs.euclideanK, bs.euclideanN);
       const shouldPlay = pattern[step];
-      const stepId = Math.floor(body.phase * body.euclideanN * 100);
+      const stepId = Math.floor(body.phase * bs.euclideanN * 100);
       if (!shouldPlay || stepId === body.lastTrigger) continue;
       body.lastTrigger = stepId;
+
+      // --- 4. Orbital speed → dynamics ---
+      const speed = Math.sqrt(body.vx ** 2 + body.vy ** 2 + body.vz ** 2);
+      const dist = Math.sqrt(body.x ** 2 + body.y ** 2 + body.z ** 2);
+
+      // --- 5. Rest probability — subtle, just for breathing ---
+      const restChance = 0.05 + (1 - state.energy) * 0.1; // 5-15% chance of rest
+      if (Math.random() < restChance) continue;
+
+      // --- 6. Call-and-response cooldown ---
+      if (bs.cooldown > 0) { bs.cooldown--; continue; }
+      if (this.globalCooldown > 0 && body.role !== 'kick' && body.role !== 'bass') continue;
+
+      // === PLAY NOTE ===
 
       if (body.role === 'kick') {
         this.ensureKick();
@@ -112,6 +197,7 @@ export class OrbitsMusic {
           this.kickPanner.pan.rampTo(Math.max(-1, Math.min(1, body.x / 400)), 0.1);
           this.kickSynth.triggerAttackRelease('C2', '8n', now);
         }
+        this.globalCooldown = 1; // brief cooldown after kick
         continue;
       }
 
@@ -122,25 +208,45 @@ export class OrbitsMusic {
       // Pan from X position
       voice.panner.pan.rampTo(Math.max(-1, Math.min(1, body.x / 400)), 0.1);
 
-      // Pitch from distance
-      const dist = Math.sqrt(body.x ** 2 + body.y ** 2 + body.z ** 2);
+      // Octave from distance
       const octaveIndex = Math.min(3, Math.floor(dist / 120));
       const chordNotes = CHORD_NOTES[this.currentChord]?.[octaveIndex];
       if (!chordNotes || chordNotes.length === 0) continue;
 
-      const note = chordNotes[Math.floor(Math.random() * chordNotes.length)];
-      const baseDuration = body.role === 'pad' ? '2n' : body.role === 'bass' ? '4n' : '8n';
-      voice.synth.triggerAttackRelease(note, baseDuration, now);
-    }
-
-    // Resonance → faster chord changes
-    for (let i = 0; i < state.bodies.length; i++) {
-      for (let j = i + 1; j < state.bodies.length; j++) {
-        const res = getResonance(state.bodies[i], state.bodies[j]);
-        if (res > 0.8 && this.chordTimer > this.chordInterval * 0.5) {
-          this.chordTimer = this.chordInterval;
-        }
+      // --- 3. Melodic memory — prefer stepwise motion ---
+      let noteIndex: number;
+      if (Math.random() < 0.7) {
+        // Stepwise: move ±1 from last note
+        const direction = Math.random() < 0.5 ? -1 : 1;
+        noteIndex = Math.max(0, Math.min(chordNotes.length - 1, bs.lastNoteIndex + direction));
+      } else if (Math.random() < 0.5) {
+        // Leap: jump to a random note
+        noteIndex = Math.floor(Math.random() * chordNotes.length);
+      } else {
+        // Repeat last note
+        noteIndex = Math.min(bs.lastNoteIndex, chordNotes.length - 1);
       }
+      bs.lastNoteIndex = noteIndex;
+      const note = chordNotes[noteIndex];
+
+      // Duration based on role + speed variation
+      const speedFactor = Math.max(0.5, Math.min(2, speed * 0.8));
+      let baseDuration: string;
+      if (body.role === 'pad') {
+        baseDuration = speedFactor < 0.8 ? '1n' : '2n'; // slower = longer notes
+      } else if (body.role === 'bass') {
+        baseDuration = speedFactor > 1.2 ? '8n' : '4n';
+      } else if (body.role === 'arp') {
+        baseDuration = speedFactor > 1.5 ? '16n' : '8n';
+      } else {
+        baseDuration = '8n';
+      }
+
+      voice.synth.triggerAttackRelease(note, baseDuration, now);
+
+      // --- 6. Set cooldowns — minimal, just prevent simultaneous fire ---
+      bs.cooldown = body.role === 'pad' ? 1 : 0;
+      this.globalCooldown = 0; // no global blocking — let voices overlap freely
     }
 
     void bpm;
@@ -155,8 +261,6 @@ export class OrbitsMusic {
     const panner = new Tone.Panner(0);
     const sendGain = new Tone.Gain(preset.busSend ?? 0);
 
-    // Chain: synth → filter → [preset effects] → panner → masterGain
-    //                                          └→ sendGain → bus
     let prev: Tone.ToneAudioNode = filter;
     for (const node of fxNodes) { prev.connect(node); prev = node; }
     prev.connect(panner);
@@ -169,7 +273,7 @@ export class OrbitsMusic {
 
   private ensureKick(): void {
     if (this.kickSynth) return;
-    const preset = this.getPresets?.()[4]; // KICK preset
+    const preset = this.getPresets?.()[4];
     if (!preset) return;
 
     const { synth, filter, fxNodes } = this.buildSynthFromPreset(preset);
@@ -206,7 +310,6 @@ export class OrbitsMusic {
     });
     synth.connect(filter);
 
-    // Build preset's effect chain
     const fxNodes: Tone.ToneAudioNode[] = [];
     if (p.effects) {
       for (const slot of p.effects) {
@@ -226,7 +329,6 @@ export class OrbitsMusic {
     this.busSendMerge.disconnect();
 
     let prev: Tone.ToneAudioNode = this.busSendMerge;
-
     const busEffects = this.getBusEffects?.() ?? [];
     for (const slot of busEffects) {
       if (!slot.enabled) continue;
@@ -248,6 +350,7 @@ export class OrbitsMusic {
       for (const n of v.fxNodes) n.dispose();
     }
     this.voices.clear();
+    this.bodyStates.clear();
     this.kickSynth?.dispose();
     this.kickFilter?.dispose();
     for (const n of this.kickFxNodes) n.dispose();

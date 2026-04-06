@@ -42,11 +42,11 @@ const DAMPING = 1.0; // no damping — Verlet conserves energy naturally
 let nextId = 0;
 
 const ROLE_CONFIGS: { role: Body['role']; presetIndex: number; bodyMass: number; loopBeats: number; euclideanK: number; euclideanN: number; color: string; radius: number; tiltAngle: number }[] = [
-  { role: 'kick',  presetIndex: 4, bodyMass: 0.5, loopBeats: 8,  euclideanK: 3, euclideanN: 8,  color: '#C74167', radius: 80,  tiltAngle: 0.1 },
-  { role: 'bass',  presetIndex: 0, bodyMass: 0.5, loopBeats: 16, euclideanK: 4, euclideanN: 16, color: '#419EC7', radius: 160, tiltAngle: 0.25 },
-  { role: 'pad',   presetIndex: 1, bodyMass: 0.5, loopBeats: 23, euclideanK: 3, euclideanN: 8,  color: '#41C78A', radius: 260, tiltAngle: -0.15 },
-  { role: 'lead',  presetIndex: 2, bodyMass: 0.5, loopBeats: 7,  euclideanK: 5, euclideanN: 7,  color: '#C7A041', radius: 380, tiltAngle: 0.35 },
-  { role: 'arp',   presetIndex: 3, bodyMass: 0.5, loopBeats: 11, euclideanK: 7, euclideanN: 11, color: '#9B59B6', radius: 520, tiltAngle: -0.3 },
+  { role: 'kick',  presetIndex: 4, bodyMass: 0.5, loopBeats: 4,  euclideanK: 3, euclideanN: 4,  color: '#C74167', radius: 80,  tiltAngle: 0.1 },
+  { role: 'bass',  presetIndex: 0, bodyMass: 0.5, loopBeats: 8,  euclideanK: 5, euclideanN: 8,  color: '#419EC7', radius: 160, tiltAngle: 0.25 },
+  { role: 'pad',   presetIndex: 1, bodyMass: 0.5, loopBeats: 11, euclideanK: 4, euclideanN: 8,  color: '#41C78A', radius: 260, tiltAngle: -0.15 },
+  { role: 'lead',  presetIndex: 2, bodyMass: 0.5, loopBeats: 5,  euclideanK: 4, euclideanN: 5,  color: '#C7A041', radius: 380, tiltAngle: 0.35 },
+  { role: 'arp',   presetIndex: 3, bodyMass: 0.5, loopBeats: 3,  euclideanK: 3, euclideanN: 4,  color: '#9B59B6', radius: 520, tiltAngle: -0.3 },
 ];
 
 const CENTRAL_MASS = 1000;

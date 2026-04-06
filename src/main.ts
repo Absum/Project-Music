@@ -73,6 +73,11 @@ function showView(view: 'synth' | 'petri' | 'orbits'): void {
     btn.classList.toggle('active', btn.getAttribute('data-view') === view);
   });
 
+  // Rebuild synth UI when switching to synth (fixes zero-size visualizations)
+  if (view === 'synth' && initialized) {
+    requestAnimationFrame(() => rebuildSynthUI());
+  }
+
   // Stop audio for inactive views
   if (view !== 'petri') petriRunning = false;
   if (view !== 'orbits') orbitsRunning = false;
