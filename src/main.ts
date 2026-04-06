@@ -19,9 +19,13 @@ import { createOrbitsState, tickOrbits, type OrbitsState } from './orbits/simula
 import { OrbitsRenderer } from './orbits/renderer.js';
 import { OrbitsMusic } from './orbits/music.js';
 
+// Tides imports
+import { TidesRenderer } from './tides/renderer.js';
+import { TidesMusic } from './tides/music.js';
+
 // --- State ---
 
-let currentView: 'synth' | 'petri' | 'orbits' = 'orbits';
+let currentView: 'synth' | 'petri' | 'orbits' | 'tides' = 'orbits';
 let initialized = false;
 
 // Synth
@@ -58,17 +62,23 @@ let orbitsRenderer: OrbitsRenderer;
 let orbitsMusic: OrbitsMusic;
 let orbitsRunning = false;
 
+// Tides
+let tidesRenderer: TidesRenderer;
+let tidesMusic: TidesMusic;
+let tidesRunning = false;
+
 function getTickInterval(): number {
   return Math.round(60000 / petriConfig.bpm / 2);
 }
 
 // --- View switching ---
 
-function showView(view: 'synth' | 'petri' | 'orbits'): void {
+function showView(view: 'synth' | 'petri' | 'orbits' | 'tides'): void {
   currentView = view;
   document.getElementById('synth-view')!.classList.toggle('hidden', view !== 'synth');
   document.getElementById('petri-view')!.classList.toggle('hidden', view !== 'petri');
   document.getElementById('orbits-view')!.classList.toggle('hidden', view !== 'orbits');
+  document.getElementById('tides-view')!.classList.toggle('hidden', view !== 'tides');
   document.querySelectorAll('.nav-btn[data-view]').forEach(btn => {
     btn.classList.toggle('active', btn.getAttribute('data-view') === view);
   });
@@ -81,6 +91,7 @@ function showView(view: 'synth' | 'petri' | 'orbits'): void {
   // Stop audio for inactive views
   if (view !== 'petri') petriRunning = false;
   if (view !== 'orbits') orbitsRunning = false;
+  if (view !== 'tides') tidesRunning = false;
 
   // Start audio for active view
   if (view === 'petri' && initialized) {
@@ -91,6 +102,10 @@ function showView(view: 'synth' | 'petri' | 'orbits'): void {
   if (view === 'orbits' && initialized) {
     orbitsRunning = true;
     orbitsTick();
+  }
+  if (view === 'tides' && initialized) {
+    tidesRunning = true;
+    tidesTick();
   }
 }
 
@@ -175,6 +190,23 @@ function orbitsRenderLoop() {
   requestAnimationFrame(orbitsRenderLoop);
 }
 
+// --- Tides ---
+
+function tidesTick() {
+  if (!tidesRunning) return;
+  const concentrations = tidesRenderer.simulation.readConcentrations();
+  tidesMusic.tick(concentrations);
+  setTimeout(tidesTick, Math.round(60000 / petriConfig.bpm / 2));
+}
+
+function tidesRenderLoop() {
+  if (currentView === 'tides') {
+    tidesRenderer.resize();
+    tidesRenderer.render();
+  }
+  requestAnimationFrame(tidesRenderLoop);
+}
+
 // --- Init ---
 
 async function init() {
@@ -217,6 +249,15 @@ async function init() {
     orbitsMusic.setBusSource(() => synthEngine.busEffects);
     await orbitsMusic.start();
 
+    // Tides
+    const tidesContainer = document.getElementById('tides-container')!;
+    tidesRenderer = new TidesRenderer(tidesContainer);
+    tidesMusic = new TidesMusic();
+    tidesMusic.setPresetSource(() => synthEngine.getAllPresets());
+    tidesMusic.setBusSource(() => synthEngine.busEffects);
+    await tidesMusic.start();
+    tidesRenderLoop();
+
     // Petri — wire synth presets as audio source
     grid = createGrid(GRID_SIZE, GRID_SIZE);
     petriAudio = new PetriAudio();
@@ -251,7 +292,7 @@ async function init() {
     // Sidebar nav
     document.querySelectorAll('.nav-btn[data-view]').forEach(btn => {
       btn.addEventListener('click', () => {
-        const view = btn.getAttribute('data-view') as 'synth' | 'petri' | 'orbits';
+        const view = btn.getAttribute('data-view') as 'synth' | 'petri' | 'orbits' | 'tides';
         if (view) showView(view);
       });
     });
