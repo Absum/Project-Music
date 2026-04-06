@@ -1,154 +1,91 @@
-export interface TidesParams {
-  feed: number;
-  kill: number;
-  dA: number;
-  dB: number;
-  speed: number;
+// Wave simulation — multiple sine waves creating interference patterns
+// Inspired by absum.net's 4-layer parallax wave animation
+
+export interface WaveLayer {
+  freqX: number;     // spatial frequency in X
+  freqZ: number;     // spatial frequency in Z
+  speed: number;     // temporal speed
+  amplitude: number; // height
+  phase: number;     // phase offset
 }
 
-const SIM_SIZE = 128; // smaller for CPU, still looks good
+export interface TidesState {
+  time: number;
+  layers: WaveLayer[];
+  // Per-region wave heights for music (4 quadrants)
+  regionHeights: number[];
+  regionDeltas: number[];
+  totalEnergy: number;
+}
 
-export class TidesSimulation {
-  private gridA: Float32Array;
-  private gridB: Float32Array;
-  private nextA: Float32Array;
-  private nextB: Float32Array;
-  private imageData: ImageData;
-  private canvas: OffscreenCanvas;
-  private ctx: OffscreenCanvasRenderingContext2D;
+export function createTidesState(): TidesState {
+  // 4 wave layers with different frequencies — like the CSS parallax layers
+  // but in 3D with X and Z directions
+  const layers: WaveLayer[] = [
+    // Very gentle, broad swells — like absum.net CSS waves
+    { freqX: 0.3,  freqZ: 0.2,  speed: 0.15, amplitude: 0.12, phase: 0 },
+    { freqX: 0.2,  freqZ: 0.35, speed: 0.12, amplitude: 0.10, phase: 1.2 },
+    // Secondary gentle waves
+    { freqX: 0.5,  freqZ: 0.4,  speed: 0.22, amplitude: 0.06, phase: 2.5 },
+    { freqX: 0.4,  freqZ: 0.6,  speed: 0.18, amplitude: 0.05, phase: 3.8 },
+    // Subtle surface movement
+    { freqX: 0.9,  freqZ: 0.7,  speed: 0.35, amplitude: 0.025, phase: 0.7 },
+    { freqX: 0.7,  freqZ: 1.0,  speed: 0.3,  amplitude: 0.02, phase: 4.1 },
+    // Fine detail shimmer
+    { freqX: 1.5,  freqZ: 1.2,  speed: 0.5,  amplitude: 0.008, phase: 1.9 },
+    { freqX: 1.2,  freqZ: 1.8,  speed: 0.45, amplitude: 0.006, phase: 5.2 },
+  ];
 
-  params: TidesParams = {
-    feed: 0.055,
-    kill: 0.062,
-    dA: 0.2097,
-    dB: 0.105,
-    speed: 8,
+  return {
+    time: 0,
+    layers,
+    regionHeights: [0, 0, 0, 0],
+    regionDeltas: [0, 0, 0, 0],
+    totalEnergy: 0,
   };
+}
 
-  readonly size = SIM_SIZE;
-  private time = 0;
+export function getWaveHeight(state: TidesState, x: number, z: number): number {
+  let h = 0;
+  for (const layer of state.layers) {
+    h += layer.amplitude * Math.sin(
+      x * layer.freqX + z * layer.freqZ + state.time * layer.speed + layer.phase
+    );
+  }
+  return h;
+}
 
-  constructor() {
-    const n = SIM_SIZE * SIM_SIZE;
-    this.gridA = new Float32Array(n).fill(1);
-    this.gridB = new Float32Array(n).fill(0);
-    this.nextA = new Float32Array(n);
-    this.nextB = new Float32Array(n);
+export function tickTides(state: TidesState, dt: number): void {
+  state.time += dt;
 
-    this.canvas = new OffscreenCanvas(SIM_SIZE, SIM_SIZE);
-    this.ctx = this.canvas.getContext('2d')!;
-    this.imageData = this.ctx.createImageData(SIM_SIZE, SIM_SIZE);
-
-    this.seed();
+  // Slowly evolve wave parameters for organic variation
+  for (let i = 0; i < state.layers.length; i++) {
+    const layer = state.layers[i];
+    // Gentle frequency drift
+    layer.freqX += Math.sin(state.time * 0.1 + i * 1.7) * 0.001;
+    layer.freqZ += Math.cos(state.time * 0.08 + i * 2.3) * 0.001;
+    // Gentle amplitude breathing
+    layer.amplitude *= 1 + Math.sin(state.time * 0.15 + i * 1.1) * 0.002;
+    // Clamp amplitude
+    const baseAmp = i < 2 ? 0.11 : i < 4 ? 0.055 : i < 6 ? 0.022 : 0.007;
+    layer.amplitude = Math.max(baseAmp * 0.5, Math.min(baseAmp * 1.5, layer.amplitude));
   }
 
-  private seed(): void {
-    // Add circular B seeds
-    for (let s = 0; s < 8; s++) {
-      const cx = 15 + Math.floor(Math.random() * (SIM_SIZE - 30));
-      const cy = 15 + Math.floor(Math.random() * (SIM_SIZE - 30));
-      const r = 3 + Math.floor(Math.random() * 5);
-      for (let dy = -r; dy <= r; dy++) {
-        for (let dx = -r; dx <= r; dx++) {
-          if (dx * dx + dy * dy <= r * r) {
-            const x = cx + dx, y = cy + dy;
-            if (x >= 0 && x < SIM_SIZE && y >= 0 && y < SIM_SIZE) {
-              this.gridB[y * SIM_SIZE + x] = 1.0;
-            }
-          }
-        }
-      }
-    }
+  // Sample wave heights at 4 region centers for music
+  const prevHeights = [...state.regionHeights];
+  const regionPoints = [
+    { x: -2, z: -2 }, // quadrant 0: front-left
+    { x:  2, z: -2 }, // quadrant 1: front-right
+    { x: -2, z:  2 }, // quadrant 2: back-left
+    { x:  2, z:  2 }, // quadrant 3: back-right
+  ];
+
+  let totalH = 0;
+  for (let r = 0; r < 4; r++) {
+    const h = getWaveHeight(state, regionPoints[r].x, regionPoints[r].z);
+    state.regionHeights[r] = h;
+    state.regionDeltas[r] = h - prevHeights[r];
+    totalH += Math.abs(h);
   }
-
-  step(): void {
-    this.time += 0.001;
-
-    // Gentle drift within the stable pattern-forming region of Gray-Scott space
-    const d1 = Math.sin(this.time * 1.0) * 0.5 + 0.5;
-    const d2 = Math.sin(this.time * 0.61) * 0.5 + 0.5;
-    const feed = 0.04 + d1 * 0.018;    // 0.040-0.058
-    const kill = 0.060 + d2 * 0.005;   // 0.060-0.065
-    this.params.feed = feed;
-    this.params.kill = kill;
-
-    const { dA, dB } = this.params;
-    const w = SIM_SIZE;
-
-    for (let s = 0; s < this.params.speed; s++) {
-      const A = this.gridA, B = this.gridB;
-      const nA = this.nextA, nB = this.nextB;
-
-      for (let y = 0; y < w; y++) {
-        for (let x = 0; x < w; x++) {
-          const i = y * w + x;
-
-          const left  = y * w + ((x - 1 + w) % w);
-          const right = y * w + ((x + 1) % w);
-          const up    = ((y - 1 + w) % w) * w + x;
-          const down  = ((y + 1) % w) * w + x;
-
-          const a = A[i], b = B[i];
-          const lapA = A[left] + A[right] + A[up] + A[down] - 4 * a;
-          const lapB = B[left] + B[right] + B[up] + B[down] - 4 * b;
-
-          const abb = a * b * b;
-          nA[i] = Math.max(0, Math.min(1, a + (dA * lapA - abb + feed * (1 - a))));
-          nB[i] = Math.max(0, Math.min(1, b + (dB * lapB + abb - (kill + feed) * b)));
-        }
-      }
-
-      // Swap: next becomes current
-      const tmpA = this.gridA;
-      const tmpB = this.gridB;
-      this.gridA = this.nextA;
-      this.gridB = this.nextB;
-      this.nextA = tmpA;
-      this.nextB = tmpB;
-    }
-  }
-
-  getImageBitmap(): ImageBitmap | OffscreenCanvas {
-    const data = this.imageData.data;
-    for (let i = 0; i < SIM_SIZE * SIM_SIZE; i++) {
-      const b = this.gridB[i];
-      const a = this.gridA[i];
-
-      // Bioluminescent palette
-      const t = b * 2.5;
-      const r = Math.floor(Math.max(0, Math.min(255, (0.04 + 0.15 * Math.cos(6.28 * (0.25 * t + 0.75))) * (0.3 + b * 2.5) * 255 * (0.4 + a * 0.6))));
-      const g = Math.floor(Math.max(0, Math.min(255, (0.06 + 0.55 * Math.cos(6.28 * (0.6 * t + 0.35))) * (0.3 + b * 2.5) * 255 * (0.4 + a * 0.6))));
-      const bl = Math.floor(Math.max(0, Math.min(255, (0.12 + 0.65 * Math.cos(6.28 * (0.5 * t + 0.15))) * (0.3 + b * 2.5) * 255 * (0.4 + a * 0.6))));
-
-      data[i * 4] = r;
-      data[i * 4 + 1] = g;
-      data[i * 4 + 2] = bl;
-      data[i * 4 + 3] = 255;
-    }
-    this.ctx.putImageData(this.imageData, 0, 0);
-    return this.canvas;
-  }
-
-  readConcentrations(): { a: number[][]; b: number[][] } {
-    const step = SIM_SIZE / 32;
-    const a: number[][] = [];
-    const b: number[][] = [];
-    for (let y = 0; y < 32; y++) {
-      const rowA: number[] = [];
-      const rowB: number[] = [];
-      for (let x = 0; x < 32; x++) {
-        const sx = Math.floor(x * step);
-        const sy = Math.floor(y * step);
-        rowA.push(this.gridA[sy * SIM_SIZE + sx]);
-        rowB.push(this.gridB[sy * SIM_SIZE + sx]);
-      }
-      a.push(rowA);
-      b.push(rowB);
-    }
-    return { a, b };
-  }
-
-  dispose(): void {
-    // nothing to dispose for CPU version
-  }
+  state.totalEnergy = totalH / 4;
 }

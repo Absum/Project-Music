@@ -20,12 +20,13 @@ import { OrbitsRenderer } from './orbits/renderer.js';
 import { OrbitsMusic } from './orbits/music.js';
 
 // Tides imports
+import { createTidesState, tickTides, type TidesState } from './tides/simulation.js';
 import { TidesRenderer } from './tides/renderer.js';
 import { TidesMusic } from './tides/music.js';
 
 // --- State ---
 
-let currentView: 'synth' | 'petri' | 'orbits' | 'tides' = 'orbits';
+let currentView: 'synth' | 'petri' | 'orbits' | 'tides' = 'tides';
 let initialized = false;
 
 // Synth
@@ -63,6 +64,7 @@ let orbitsMusic: OrbitsMusic;
 let orbitsRunning = false;
 
 // Tides
+let tidesState: TidesState;
 let tidesRenderer: TidesRenderer;
 let tidesMusic: TidesMusic;
 let tidesRunning = false;
@@ -100,6 +102,15 @@ function showView(view: 'synth' | 'petri' | 'orbits' | 'tides'): void {
     if (rebuildPetriBar) rebuildPetriBar();
   }
   if (view === 'orbits' && initialized) {
+    if (!orbitsRenderer) {
+      // Defer creation — container needs to be visible and laid out
+      setTimeout(() => {
+        const container = document.getElementById('orbits-container');
+        if (container && container.clientWidth > 0 && !orbitsRenderer) {
+          orbitsRenderer = new OrbitsRenderer(container);
+        }
+      }, 100);
+    }
     orbitsRunning = true;
     orbitsTick();
   }
@@ -179,8 +190,7 @@ function orbitsTick() {
 }
 
 function orbitsRenderLoop() {
-  if (currentView === 'orbits') {
-    // Simulation runs every frame — fixed timestep handled internally
+  if (currentView === 'orbits' && orbitsRenderer) {
     if (orbitsRunning) {
       tickOrbits(orbitsState, 0.5);
     }
@@ -194,15 +204,15 @@ function orbitsRenderLoop() {
 
 function tidesTick() {
   if (!tidesRunning) return;
-  const concentrations = tidesRenderer.simulation.readConcentrations();
-  tidesMusic.tick(concentrations);
+  tidesMusic.tick(tidesState);
   setTimeout(tidesTick, Math.round(60000 / petriConfig.bpm / 2));
 }
 
 function tidesRenderLoop() {
   if (currentView === 'tides') {
+    tickTides(tidesState, 0.016);
     tidesRenderer.resize();
-    tidesRenderer.render();
+    tidesRenderer.render(tidesState);
   }
   requestAnimationFrame(tidesRenderLoop);
 }
@@ -240,16 +250,15 @@ async function init() {
     rebuildSynthUI();
     setupKeyboard(document.getElementById('keyboard')!, n => synthEngine.noteOn(n), n => synthEngine.noteOff(n));
 
-    // Orbits
-    const orbitsContainer = document.getElementById('orbits-container')!;
+    // Orbits — lazy init (container needs to be visible for sizing)
     orbitsState = createOrbitsState(800, 600);
-    orbitsRenderer = new OrbitsRenderer(orbitsContainer);
     orbitsMusic = new OrbitsMusic();
     orbitsMusic.setPresetSource(() => synthEngine.getAllPresets());
     orbitsMusic.setBusSource(() => synthEngine.busEffects);
     await orbitsMusic.start();
 
     // Tides
+    tidesState = createTidesState();
     const tidesContainer = document.getElementById('tides-container')!;
     tidesRenderer = new TidesRenderer(tidesContainer);
     tidesMusic = new TidesMusic();
@@ -300,7 +309,7 @@ async function init() {
     // Melody sidecart — always visible
     buildMelodyPanel(document.getElementById('melody-panel')!, melodyConfig, petriConfig, () => petriAudio.setMelodyConfig(melodyConfig));
 
-    showView('orbits');
+    showView('tides');
     orbitsRenderLoop();
     petriRenderLoop();
   });

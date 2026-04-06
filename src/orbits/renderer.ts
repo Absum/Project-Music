@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import type { OrbitsState, Body } from './simulation.js';
 import { getResonance } from './simulation.js';
+import { SpectrumAnalyser } from '../ui/spectrum.js';
 
 const MAX_TRAIL = 800;
 const RESONANCE_POINTS = 21;
@@ -29,6 +30,7 @@ export class OrbitsRenderer {
   private lastEnergy = -1;
 
   private time = 0;
+  private spectrum!: SpectrumAnalyser;
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -98,6 +100,8 @@ export class OrbitsRenderer {
       this.resonanceLines.push(line);
     }
 
+    this.spectrum = new SpectrumAnalyser(this.container);
+
     window.addEventListener('resize', () => this.onResize());
   }
 
@@ -141,6 +145,7 @@ export class OrbitsRenderer {
 
     this.controls.update();
     this.renderer.render(this.scene, this.camera);
+    this.spectrum.draw();
   }
 
   private getColor(body: Body): THREE.Color {

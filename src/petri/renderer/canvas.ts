@@ -1,5 +1,6 @@
 import type { GridState, SimulationEvent } from '../types.js';
 import { SPECIES_PRESETS } from '../simulation/species.js';
+import { SpectrumAnalyser } from '../../ui/spectrum.js';
 
 interface Particle {
   x: number; y: number; vx: number; vy: number;
@@ -21,6 +22,7 @@ export class PetriRenderer {
   private time = 0;
 
   private lastW = 0;
+  private spectrum: SpectrumAnalyser | null = null;
   private lastH = 0;
 
   constructor(canvas: HTMLCanvasElement) {
@@ -252,6 +254,12 @@ export class PetriRenderer {
       ctx.stroke();
       ctx.shadowBlur = 0;
     }
+
+    // Spectrum analyser
+    if (!this.spectrum && this.canvas.parentElement) {
+      this.spectrum = new SpectrumAnalyser(this.canvas.parentElement);
+    }
+    this.spectrum?.draw();
   }
 
   getCellFromPixel(px: number, py: number, grid: GridState): { x: number; y: number } | null {

@@ -1,8 +1,8 @@
 import * as Tone from 'tone';
+import type { TidesState } from './simulation.js';
 import type { SynthPreset, FxSlot } from '../audio/presets.js';
 import { getFxDef } from '../audio/fx-registry.js';
 
-// Markov chord progression (shared with orbits)
 const CHORD_NOTES: Record<string, string[][]> = {
   'i':   [['C2','C3'], ['C3','Eb3','G3'], ['C4','Eb4','G4'], ['C5','Eb5','G5']],
   'iv':  [['F2','F3'], ['F3','Ab3','C4'], ['F4','Ab4','C5'], ['F5']],
@@ -29,13 +29,8 @@ function nextChord(current: string): string {
   return options[0].next;
 }
 
-// 4 regions of the 32x32 readback grid → 4 voices
-// Region layout: quadrants
-interface RegionState {
-  lastB: number;       // previous tick's average B concentration
-  lastNoteIndex: number;
-  active: boolean;
-}
+// 4 regions → 4 voices: bass, pad, lead, arp
+const REGION_PRESETS = [0, 1, 2, 3]; // BASS, PAD, LEAD, ARP
 
 interface VoiceChain {
   synth: Tone.FMSynth;
@@ -43,6 +38,12 @@ interface VoiceChain {
   fxNodes: Tone.ToneAudioNode[];
   panner: Tone.Panner;
   sendGain: Tone.Gain;
+}
+
+interface RegionState {
+  lastHeight: number;
+  lastNoteIndex: number;
+  crossedZero: boolean;  // wave crossed zero → trigger
 }
 
 export class TidesMusic {
@@ -56,15 +57,7 @@ export class TidesMusic {
   private kickFilter: Tone.Filter | null = null;
   private kickFxNodes: Tone.ToneAudioNode[] = [];
 
-  // Voice presets: 0=BASS, 1=PAD, 2=LEAD, 3=ARP, 4=KICK
-  private regionPresets = [0, 1, 2, 3]; // one preset per quadrant
-  private regionStates: RegionState[] = [
-    { lastB: 0, lastNoteIndex: 0, active: false },
-    { lastB: 0, lastNoteIndex: 0, active: false },
-    { lastB: 0, lastNoteIndex: 0, active: false },
-    { lastB: 0, lastNoteIndex: 0, active: false },
-  ];
-
+  private regionStates: RegionState[] = [];
   private currentChord = 'i';
   private chordTimer = 0;
   private chordInterval = 24;
@@ -80,102 +73,82 @@ export class TidesMusic {
   async start(): Promise<void> {
     if (this.initialized) return;
     await Tone.start();
-    this.masterGain = new Tone.Gain(1.0).toDestination();
+    const lowCut = new Tone.Filter({ frequency: 35, type: 'highpass', rolloff: -24 });
+    this.masterGain = new Tone.Gain(1.0);
+    this.masterGain.connect(lowCut);
+    lowCut.toDestination();
     this.busReturn = new Tone.Gain(1.0);
     this.busReturn.connect(this.masterGain);
     this.busSendMerge = new Tone.Gain(1);
     this.rebuildBus();
+
+    for (let i = 0; i < 4; i++) {
+      this.regionStates.push({ lastHeight: 0, lastNoteIndex: 0, crossedZero: false });
+    }
+
     this.initialized = true;
   }
 
-  tick(concentrations: { a: number[][]; b: number[][] }): void {
+  tick(state: TidesState): void {
     if (!this.initialized) return;
     this.tickCount++;
-
     const now = Tone.now();
-    const gridSize = concentrations.b.length; // 32
-    const half = gridSize / 2;
 
-    // Chord progression — driven by total B concentration
-    let totalB = 0;
-    for (let y = 0; y < gridSize; y++) {
-      for (let x = 0; x < gridSize; x++) {
-        totalB += concentrations.b[y][x];
-      }
-    }
-    const avgB = totalB / (gridSize * gridSize);
-
+    // Chord progression driven by total wave energy
     this.chordTimer++;
-    // Higher B activity = faster chord changes
-    this.chordInterval = Math.round(32 - avgB * 20); // 12-32 beats
+    this.chordInterval = Math.round(28 - state.totalEnergy * 40); // 8-28 beats
+    this.chordInterval = Math.max(8, this.chordInterval);
     if (this.chordTimer >= this.chordInterval) {
       this.chordTimer = 0;
       this.currentChord = nextChord(this.currentChord);
     }
 
-    // Process each quadrant region
-    const regions = [
-      { x0: 0, y0: 0, x1: half, y1: half },       // top-left → bass
-      { x0: half, y0: 0, x1: gridSize, y1: half },  // top-right → pad
-      { x0: 0, y0: half, x1: half, y1: gridSize },  // bottom-left → lead
-      { x0: half, y0: half, x1: gridSize, y1: gridSize }, // bottom-right → arp
-    ];
-
-    // Kick from total activity
-    if (this.tickCount % 2 === 0 && avgB > 0.05) {
+    // Kick on wave peaks — when total energy is high
+    if (this.tickCount % 2 === 0 && state.totalEnergy > 0.15) {
       this.ensureKick();
       if (this.kickSynth) {
         this.kickSynth.triggerAttackRelease('C2', '8n', now);
       }
     }
 
+    // Process each region
     for (let r = 0; r < 4; r++) {
-      const region = regions[r];
       const rs = this.regionStates[r];
+      const height = state.regionHeights[r];
+      const delta = state.regionDeltas[r];
 
-      // Average B in this region
-      let regionB = 0;
-      let count = 0;
-      for (let y = region.y0; y < region.y1; y++) {
-        for (let x = region.x0; x < region.x1; x++) {
-          regionB += concentrations.b[y][x];
-          count++;
-        }
-      }
-      regionB /= count;
+      // Detect zero-crossing (wave crest passing through)
+      const wasPositive = rs.lastHeight > 0;
+      const isPositive = height > 0;
+      const zeroCrossing = wasPositive !== isPositive;
 
-      // Detect wavefront: B concentration change
-      const delta = regionB - rs.lastB;
-      rs.lastB = regionB;
+      // Detect peaks (wave crest)
+      const wasPeak = rs.lastHeight > height && delta < 0 && height > 0.05;
 
-      // Trigger based on:
-      // - Wavefront arriving (any positive change)
-      // - High concentration with probability scaled by B level
-      // - Periodic trigger based on concentration level
-      const wavefrontTrigger = Math.abs(delta) > 0.001;
-      const concentrationTrigger = regionB > 0.1 && Math.random() < regionB * 0.4;
-      const periodicTrigger = regionB > 0.05 && (this.tickCount + r * 3) % Math.max(2, Math.round(8 - regionB * 6)) === 0;
+      rs.lastHeight = height;
 
-      if (!wavefrontTrigger && !concentrationTrigger && !periodicTrigger) continue;
+      // Trigger on zero crossings (rhythmic) and peaks (melodic)
+      const shouldTrigger = zeroCrossing || wasPeak ||
+        (Math.abs(height) > 0.2 && (this.tickCount + r * 3) % 4 === 0);
 
-      // Ensure voice
+      if (!shouldTrigger) continue;
+
       this.ensureVoice(r);
       const voice = this.voices.get(r);
       if (!voice) continue;
 
-      // Pan from region position
-      const panX = r % 2 === 0 ? -0.5 : 0.5;
-      voice.panner.pan.rampTo(panX, 0.1);
+      // Pan: regions 0,2 left, 1,3 right
+      voice.panner.pan.rampTo(r % 2 === 0 ? -0.4 : 0.4, 0.1);
 
-      // Octave from region (top = higher, bottom = lower)
-      const octaveIndex = r < 2 ? Math.min(3, Math.floor(regionB * 4)) : Math.max(0, Math.floor(regionB * 2));
+      // Octave from wave height (higher waves = higher pitch)
+      const octaveIndex = Math.min(3, Math.max(0, Math.floor((height + 0.5) * 3)));
       const chordNotes = CHORD_NOTES[this.currentChord]?.[octaveIndex];
       if (!chordNotes || chordNotes.length === 0) continue;
 
-      // Melodic memory — stepwise preference
+      // Melodic memory — stepwise
       let noteIndex: number;
       if (Math.random() < 0.65) {
-        noteIndex = Math.max(0, Math.min(chordNotes.length - 1, rs.lastNoteIndex + (Math.random() < 0.5 ? -1 : 1)));
+        noteIndex = Math.max(0, Math.min(chordNotes.length - 1, rs.lastNoteIndex + (delta > 0 ? 1 : -1)));
       } else {
         noteIndex = Math.floor(Math.random() * chordNotes.length);
       }
@@ -183,8 +156,9 @@ export class TidesMusic {
 
       const note = chordNotes[noteIndex];
 
-      // Duration from concentration level
-      const duration = regionB > 0.4 ? '2n' : regionB > 0.2 ? '4n' : '8n';
+      // Duration: bigger waves = longer notes
+      const absDelta = Math.abs(delta);
+      const duration = absDelta > 0.02 ? '4n' : absDelta > 0.01 ? '8n' : '16n';
 
       voice.synth.triggerAttackRelease(note, duration, now);
     }
@@ -192,8 +166,7 @@ export class TidesMusic {
 
   private ensureVoice(regionIdx: number): void {
     if (this.voices.has(regionIdx)) return;
-    const presetIdx = this.regionPresets[regionIdx];
-    const preset = this.getPresets?.()[presetIdx];
+    const preset = this.getPresets?.()[REGION_PRESETS[regionIdx]];
     if (!preset) return;
 
     const { synth, filter, fxNodes } = this.buildSynthFromPreset(preset);
@@ -265,7 +238,6 @@ export class TidesMusic {
     for (const node of this.busNodes) { node.disconnect(); node.dispose(); }
     this.busNodes = [];
     this.busSendMerge.disconnect();
-
     let prev: Tone.ToneAudioNode = this.busSendMerge;
     const busEffects = this.getBusEffects?.() ?? [];
     for (const slot of busEffects) {

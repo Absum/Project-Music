@@ -79,7 +79,10 @@ export class AudioEngine {
     if (this.initialized) return;
     await Tone.start();
 
-    this.masterGain = new Tone.Gain(1.0).toDestination();
+    const lowCut = new Tone.Filter({ frequency: 35, type: 'highpass', rolloff: -24 });
+    this.masterGain = new Tone.Gain(1.0);
+    this.masterGain.connect(lowCut);
+    lowCut.toDestination();
     this.busReturn = new Tone.Gain(1.0);
     this.busReturn.connect(this.masterGain);
     this.busSendMerge = new Tone.Gain(1);
