@@ -66,7 +66,7 @@ export class PetriRenderer {
     }
   }
 
-  render(grid: GridState, bpm = 120): void {
+  render(grid: GridState, bpm = 120, playheadCol = -1): void {
     this.time += 0.016;
     const rect = this.canvas.getBoundingClientRect();
     const w = rect.width;
@@ -82,14 +82,29 @@ export class PetriRenderer {
     ctx.fillStyle = '#101118';
     ctx.fillRect(0, 0, w, h);
 
-    // Subtle grid
-    ctx.strokeStyle = 'rgba(65,158,199,0.03)';
+    // Pitch lane lines — every 5th row (octave boundaries in pentatonic)
+    ctx.strokeStyle = 'rgba(65,158,199,0.06)';
     ctx.lineWidth = 1;
+    for (let y = 0; y < grid.height; y++) {
+      if (y % 5 === 0) {
+        ctx.strokeStyle = 'rgba(65,158,199,0.1)';
+      } else {
+        ctx.strokeStyle = 'rgba(65,158,199,0.03)';
+      }
+      ctx.beginPath(); ctx.moveTo(0, y * cellH); ctx.lineTo(w, y * cellH); ctx.stroke();
+    }
+    // Vertical grid — subtle
+    ctx.strokeStyle = 'rgba(65,158,199,0.03)';
     for (let x = 0; x <= grid.width; x++) {
       ctx.beginPath(); ctx.moveTo(x * cellW, 0); ctx.lineTo(x * cellW, h); ctx.stroke();
     }
-    for (let y = 0; y <= grid.height; y++) {
-      ctx.beginPath(); ctx.moveTo(0, y * cellH); ctx.lineTo(w, y * cellH); ctx.stroke();
+
+    // Playhead column highlight
+    if (playheadCol >= 0) {
+      const phX = playheadCol * cellW;
+      // Column glow
+      ctx.fillStyle = 'rgba(65,158,199,0.06)';
+      ctx.fillRect(phX, 0, cellW, h);
     }
 
     // Resource heat map
@@ -147,13 +162,15 @@ export class PetriRenderer {
         const py = y * cellH + cellH / 2;
         const color = this.getColor(org.species);
         const energyRatio = org.energy / org.maxEnergy;
-        const pulse = 1 + Math.sin(beatPhase + org.id * 0.3) * 0.15;
+        const isHit = playheadCol >= 0 && x === playheadCol;
+        const hitPulse = isHit ? 1.4 : 1;
+        const pulse = (1 + Math.sin(beatPhase + org.id * 0.3) * 0.15) * hitPulse;
         const blobR = Math.min(cellSize * 0.38, 12) + Math.min(cellSize * 0.1, 4) * energyRatio * pulse;
 
-        // Glow
-        const glowR = blobR * 2;
+        // Glow — much brighter when playhead hits
+        const glowR = blobR * (isHit ? 3 : 2);
         const glow = ctx.createRadialGradient(px, py, 0, px, py, glowR);
-        glow.addColorStop(0, color + '18');
+        glow.addColorStop(0, color + (isHit ? '50' : '18'));
         glow.addColorStop(1, color + '00');
         ctx.beginPath();
         ctx.arc(px, py, glowR, 0, Math.PI * 2);
@@ -221,6 +238,20 @@ export class PetriRenderer {
     vg.addColorStop(1, 'rgba(16,17,24,0.4)');
     ctx.fillStyle = vg;
     ctx.fillRect(0, 0, w, h);
+
+    // Playhead line — on top of everything
+    if (playheadCol >= 0) {
+      const phX = playheadCol * cellW + cellW / 2;
+      ctx.beginPath();
+      ctx.moveTo(phX, 0);
+      ctx.lineTo(phX, h);
+      ctx.strokeStyle = '#419EC7';
+      ctx.lineWidth = 2;
+      ctx.shadowColor = '#419EC7';
+      ctx.shadowBlur = 8;
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+    }
   }
 
   getCellFromPixel(px: number, py: number, grid: GridState): { x: number; y: number } | null {

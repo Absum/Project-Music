@@ -13,8 +13,8 @@ export const SPECIES_PRESETS: SpeciesPreset[] = [
       sustain: 0.6,
       release: 0.4,
     },
-    reproductionCost: 35, // cheap to reproduce, but average efficiency — the generalist
-    energyEfficiency: 1.0,
+    reproductionCost: 33, // generalist — balanced
+    energyEfficiency: 1.05,
   },
   {
     name: 'Sawtonis',
@@ -28,8 +28,8 @@ export const SPECIES_PRESETS: SpeciesPreset[] = [
       sustain: 0.4,
       release: 0.2,
     },
-    reproductionCost: 30, // breeds fastest, but burns resources — the swarm
-    energyEfficiency: 0.7,
+    reproductionCost: 32, // fast breeder but resource hungry
+    energyEfficiency: 0.8,
   },
   {
     name: 'Quadrus',
@@ -43,8 +43,8 @@ export const SPECIES_PRESETS: SpeciesPreset[] = [
       sustain: 0.7,
       release: 0.3,
     },
-    reproductionCost: 48, // efficient but slow to reproduce — the tank
-    energyEfficiency: 1.2,
+    reproductionCost: 35, // efficient and steady
+    energyEfficiency: 1.3,
   },
   {
     name: 'Triangula',
@@ -58,7 +58,7 @@ export const SPECIES_PRESETS: SpeciesPreset[] = [
       sustain: 0.5,
       release: 0.6,
     },
-    reproductionCost: 40, // balanced with slightly better efficiency — the survivor
+    reproductionCost: 33, // balanced survivor
     energyEfficiency: 1.1,
   },
 ];

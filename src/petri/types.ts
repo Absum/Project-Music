@@ -36,6 +36,14 @@ export interface GridState {
   tick: number;
 }
 
+export interface CollisionConfig {
+  noiseType: 'white' | 'pink' | 'brown';
+  volume: number;
+  attack: number;
+  decay: number;
+  filterCutoff: number;
+}
+
 export interface SimulationConfig {
   bpm: number;
   mutationRate: number;
@@ -43,6 +51,32 @@ export interface SimulationConfig {
   reproductionThreshold: number;
   maxOrganisms: number;
   gravity: { x: number; y: number } | null;
+  collision: CollisionConfig;
+  autoSpawn: boolean;
+  reproductionProbability: number;
+  gracePeriodTicks: number;
+}
+
+// Melody configuration
+export type ScaleType = 'minorPentatonic' | 'majorPentatonic' | 'minor' | 'major'
+  | 'chromatic' | 'blues' | 'dorian' | 'mixolydian' | 'phrygian' | 'harmonicMinor';
+
+export type RootNote = 'C' | 'C#' | 'D' | 'D#' | 'E' | 'F' | 'F#' | 'G' | 'G#' | 'A' | 'A#' | 'B';
+
+export type NoteDuration = '16n' | '8n' | '4n' | '2n' | '1n';
+
+export type KickDensity = 1 | 2 | 4;
+
+export interface MelodyConfig {
+  rootNote: RootNote;
+  scaleType: ScaleType;
+  octaveLow: number;
+  octaveHigh: number;
+  speciesDuration: [NoteDuration, NoteDuration, NoteDuration, NoteDuration];
+  kickDensity: KickDensity;
+  kickPitch: string;
+  maxNotesPerSpecies: number;
+  masterVolume: number;
 }
 
 export interface SimulationEvent {

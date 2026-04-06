@@ -97,10 +97,13 @@
       .key.black.active { background: linear-gradient(180deg, rgba(65,158,199,0.12) 0%, rgba(65,158,199,0.06) 100%); }
 
       /* ═══ PETRI VIEW ═══ */
+      .petri-middle { display: flex; flex: 1; overflow: hidden; }
       .petri-area { flex: 1; position: relative; overflow: hidden; }
       #petri-canvas { width: 100%; height: 100%; display: block; cursor: crosshair; }
+      .melody-sidecart { width: 280px; padding: 12px; overflow-y: auto; flex-shrink: 0; background: rgba(12,14,20,0.6); border-left: 1px solid rgba(65,158,199,0.1); }
+      .melody-sidecart.hidden { display: none; }
       #petri-bar { display: flex; gap: 16px; align-items: flex-end; padding: 10px 16px; border-top: 1px solid rgba(65,158,199,0.15); background: linear-gradient(180deg, #0e1018 0%, #101118 100%); flex-shrink: 0; overflow-x: auto; }
-      .petri-bar-section { display: flex; flex-direction: column; gap: 4px; }
+      .petri-bar-section { display: flex; flex-direction: column; gap: 4px; flex-shrink: 0; }
       .bar-section-label { font-size: 0.5rem; font-weight: 600; letter-spacing: 0.25em; color: #419EC7; }
       .species-row, .tool-row { display: flex; gap: 3px; }
       .species-btn { padding: 6px 12px; font-family: 'Rajdhani', sans-serif; font-weight: 500; font-size: 0.7rem; letter-spacing: 0.1em; background: rgba(16,17,25,0.8); border: 1px solid rgba(65,158,199,0.15); color: rgba(200,212,224,0.4); cursor: pointer; transition: all 0.12s; }
@@ -120,6 +123,7 @@
       <div class="sidebar">
         <button class="nav-btn active" data-view="petri" title="Petri Dish">&#9673;</button>
         <button class="nav-btn" data-view="synth" title="Synthesizer">&#9835;</button>
+        <button class="nav-btn" id="melody-toggle" title="Melody Settings">&#9881;</button>
       </div>
 
       <!-- Synth View -->
@@ -141,8 +145,11 @@
 
       <!-- Petri View -->
       <div id="petri-view" class="view-container">
-        <div class="petri-area">
-          <canvas id="petri-canvas"></canvas>
+        <div class="petri-middle">
+          <div class="petri-area">
+            <canvas id="petri-canvas"></canvas>
+          </div>
+          <div id="melody-panel" class="melody-sidecart hidden"></div>
         </div>
         <div id="petri-bar"></div>
       </div>

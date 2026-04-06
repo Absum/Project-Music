@@ -7,7 +7,7 @@ import { drawEnvelope, drawFilterResponse, drawOscillator, drawFM } from '../ui/
 
 // --- Helpers ---
 
-function addSection(parent: HTMLElement, title: string): { section: HTMLElement; knobRow: HTMLElement } {
+export function addSection(parent: HTMLElement, title: string): { section: HTMLElement; knobRow: HTMLElement } {
   const section = document.createElement('div');
   section.className = 'synth-section';
   const label = document.createElement('div');
@@ -20,7 +20,7 @@ function addSection(parent: HTMLElement, title: string): { section: HTMLElement;
   return { section, knobRow };
 }
 
-function addDropdown(parent: HTMLElement, label: string, options: string[], value: string, onChange: (v: string) => void): void {
+export function addDropdown(parent: HTMLElement, label: string, options: string[], value: string, onChange: (v: string) => void): void {
   const wrap = document.createElement('div');
   wrap.className = 'dropdown-wrap';
   const lbl = document.createElement('div');

@@ -20,6 +20,7 @@ export class PetriControls {
   private _config: SimulationConfig | null = null;
   private _running = true;
   private _onToggleRun: (() => void) | null = null;
+  private _onToggleMelody: (() => void) | null = null;
 
   getSelectedSpecies(): number { return this.selectedSpecies; }
   getActiveTool(): Tool { return this.activeTool; }
@@ -38,6 +39,10 @@ export class PetriControls {
       case 'mutate': mutateRegion(grid, cellX, cellY, 3); break;
       case 'earthquake': earthquake(grid); break;
     }
+  }
+
+  setMelodyToggle(cb: () => void): void {
+    this._onToggleMelody = cb;
   }
 
   buildBottomBar(container: HTMLElement, config: SimulationConfig, running = true, onToggleRun?: () => void): void {
@@ -119,5 +124,70 @@ export class PetriControls {
     createKnob(knobRow, { label: 'REGEN', value: config.resourceRegenRate, min: 0.1, max: 5, step: 0.1, size: 40, onChange: v => { config.resourceRegenRate = v; } });
     knobSection.appendChild(knobRow);
     container.appendChild(knobSection);
+
+    // Auto-spawn toggle
+    const spawnSection = document.createElement('div');
+    spawnSection.className = 'petri-bar-section';
+    const spawnBtn = document.createElement('button');
+    spawnBtn.className = `tool-btn ${config.autoSpawn ? 'active' : ''}`;
+    spawnBtn.textContent = '\u267B';
+    spawnBtn.title = config.autoSpawn ? 'Auto-spawn: ON' : 'Auto-spawn: OFF';
+    spawnBtn.addEventListener('click', () => { config.autoSpawn = !config.autoSpawn; this.rebuild(); });
+    spawnSection.appendChild(spawnBtn);
+    container.appendChild(spawnSection);
+
+    // Collision sound
+    const collSection = document.createElement('div');
+    collSection.className = 'petri-bar-section';
+    const collLabel = document.createElement('div');
+    collLabel.className = 'bar-section-label';
+    collLabel.textContent = 'COLLISION';
+    collSection.appendChild(collLabel);
+
+    const collRow = document.createElement('div');
+    collRow.className = 'knob-row';
+
+    // Noise type dropdown
+    const typeWrap = document.createElement('div');
+    typeWrap.className = 'dropdown-wrap';
+    const typeLbl = document.createElement('div');
+    typeLbl.className = 'dropdown-label';
+    typeLbl.textContent = 'TYPE';
+    const typeSelect = document.createElement('select');
+    typeSelect.className = 'synth-select';
+    for (const t of ['white', 'pink', 'brown']) {
+      const opt = document.createElement('option');
+      opt.value = t;
+      opt.textContent = t.toUpperCase();
+      if (t === config.collision.noiseType) opt.selected = true;
+      typeSelect.appendChild(opt);
+    }
+    typeSelect.addEventListener('change', () => { config.collision.noiseType = typeSelect.value as 'white' | 'pink' | 'brown'; });
+    typeWrap.appendChild(typeLbl);
+    typeWrap.appendChild(typeSelect);
+    collRow.appendChild(typeWrap);
+
+    createKnob(collRow, { label: 'VOL', value: config.collision.volume, min: -40, max: -6, step: 1, unit: 'dB', size: 40, onChange: v => { config.collision.volume = v; } });
+    createKnob(collRow, { label: 'DECAY', value: config.collision.decay, min: 0.01, max: 0.5, step: 0.01, unit: 's', size: 40, onChange: v => { config.collision.decay = v; } });
+    createKnob(collRow, { label: 'FILTER', value: config.collision.filterCutoff, min: 200, max: 10000, step: 50, unit: 'Hz', size: 40, onChange: v => { config.collision.filterCutoff = v; } });
+
+    collSection.appendChild(collRow);
+    container.appendChild(collSection);
+
+    // Melody settings toggle (gear icon)
+    if (this._onToggleMelody) {
+      const gearSection = document.createElement('div');
+      gearSection.className = 'petri-bar-section melody-toggle';
+      const gearBtn = document.createElement('button');
+      gearBtn.className = 'tool-btn';
+      gearBtn.textContent = '\u2699';
+      gearBtn.title = 'Melody Settings';
+      const panel = document.getElementById('melody-panel');
+      if (panel && !panel.classList.contains('hidden')) gearBtn.classList.add('active');
+      const cb = this._onToggleMelody;
+      gearBtn.addEventListener('click', () => cb());
+      gearSection.appendChild(gearBtn);
+      container.appendChild(gearSection);
+    }
   }
 }

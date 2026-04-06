@@ -11,7 +11,8 @@ import { createGrid, spawnOrganism, tick } from './petri/simulation/grid.js';
 import { PetriRenderer } from './petri/renderer/canvas.js';
 import { AudioEngine as PetriAudio } from './petri/audio/engine.js';
 import { PetriControls } from './petri/controls.js';
-import type { GridState, SimulationConfig } from './petri/types.js';
+import { buildMelodyPanel } from './petri/melody-panel.js';
+import type { GridState, SimulationConfig, MelodyConfig } from './petri/types.js';
 
 // --- State ---
 
@@ -25,8 +26,20 @@ let visualizer: Visualizer | null = null;
 // Petri
 const GRID_SIZE = 32;
 const petriConfig: SimulationConfig = {
-  bpm: 148, mutationRate: 0.3, resourceRegenRate: 1.5,
+  bpm: 148, mutationRate: 0.3, resourceRegenRate: 2.0,
   reproductionThreshold: 40, maxOrganisms: 200, gravity: null,
+  collision: { noiseType: 'pink', volume: -26, attack: 0.001, decay: 0.05, filterCutoff: 2450 },
+  autoSpawn: true,
+  reproductionProbability: 0.3,
+  gracePeriodTicks: 5,
+};
+
+const melodyConfig: MelodyConfig = {
+  rootNote: 'C', scaleType: 'minorPentatonic',
+  octaveLow: 2, octaveHigh: 5,
+  speciesDuration: ['4n', '8n', '8n', '16n'],
+  kickDensity: 2, kickPitch: 'C2',
+  maxNotesPerSpecies: 1, masterVolume: -7,
 };
 let grid: GridState;
 let petriRenderer: PetriRenderer;
@@ -82,6 +95,7 @@ function togglePetri() {
 function petriTick() {
   if (!petriRunning) return;
   const events = tick(grid, petriConfig);
+  petriAudio.syncCollisionConfig(petriConfig.collision);
   petriAudio.processEvents(events, grid.width);
   petriAudio.updateOrganisms(grid);
   petriRenderer.processEvents(events);
@@ -91,19 +105,27 @@ function petriTick() {
 function petriRenderLoop() {
   if (currentView === 'petri') {
     petriRenderer.resize();
-    petriRenderer.render(grid, petriConfig.bpm);
+    petriRenderer.render(grid, petriConfig.bpm, petriAudio.playheadCol);
   }
   requestAnimationFrame(petriRenderLoop);
 }
 
 function seedOrganisms() {
-  const c = Math.floor(GRID_SIZE / 2);
-  const o = 5;
-  for (let i = 0; i < 3; i++) {
-    spawnOrganism(grid, c - o + i, c - o, 0);
-    spawnOrganism(grid, c + o - i, c - o, 1);
-    spawnOrganism(grid, c - o + i, c + o, 2);
-    spawnOrganism(grid, c + o - i, c + o, 3);
+  // Spread species to four corners so they don't immediately fight
+  const corners = [
+    { x: 5, y: 5 },    // top-left: species 0
+    { x: 26, y: 5 },   // top-right: species 1
+    { x: 5, y: 26 },   // bottom-left: species 2
+    { x: 26, y: 26 },  // bottom-right: species 3
+  ];
+  for (let s = 0; s < 4; s++) {
+    const cx = corners[s].x;
+    const cy = corners[s].y;
+    // Cluster of 5 with full energy
+    for (const [dx, dy] of [[0, 0], [1, 0], [0, 1], [-1, 0], [0, -1]]) {
+      const org = spawnOrganism(grid, cx + dx, cy + dy, s);
+      if (org) org.energy = 80;
+    }
   }
 }
 
@@ -144,6 +166,7 @@ async function init() {
     grid = createGrid(GRID_SIZE, GRID_SIZE);
     petriAudio = new PetriAudio();
     petriAudio.setPresetSource(() => synthEngine.getAllPresets());
+    petriAudio.setMelodyConfig(melodyConfig);
     await petriAudio.start();
     const petriCanvas = document.getElementById('petri-canvas') as HTMLCanvasElement;
     petriRenderer = new PetriRenderer(petriCanvas);
@@ -169,10 +192,26 @@ async function init() {
     });
 
     // Sidebar nav
-    document.querySelectorAll('.nav-btn').forEach(btn => {
+    document.querySelectorAll('.nav-btn[data-view]').forEach(btn => {
       btn.addEventListener('click', () => {
-        showView(btn.getAttribute('data-view') as 'synth' | 'petri');
+        const view = btn.getAttribute('data-view') as 'synth' | 'petri';
+        if (view) showView(view);
       });
+    });
+
+    // Melody sidecart toggle
+    const melodyPanel = document.getElementById('melody-panel')!;
+    const melodyBtn = document.getElementById('melody-toggle')!;
+    melodyBtn.addEventListener('click', () => {
+      // Switch to petri view if not already there
+      if (currentView !== 'petri') showView('petri');
+      // Toggle sidecart
+      const wasHidden = melodyPanel.classList.contains('hidden');
+      melodyPanel.classList.toggle('hidden');
+      melodyBtn.classList.toggle('active');
+      if (wasHidden) {
+        buildMelodyPanel(melodyPanel, melodyConfig, petriConfig, () => petriAudio.setMelodyConfig(melodyConfig));
+      }
     });
 
     showView('petri');
