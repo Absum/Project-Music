@@ -8,6 +8,8 @@
     "build": "tsc && vite build"
   },
   "dependencies": {
+    "@types/three": "^0.183.1",
+    "three": "^0.183.2",
     "tone": "^14.7.77"
   },
   "devDependencies": {

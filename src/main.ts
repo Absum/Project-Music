@@ -14,9 +14,14 @@ import { PetriControls } from './petri/controls.js';
 import { buildMelodyPanel } from './petri/melody-panel.js';
 import type { GridState, SimulationConfig, MelodyConfig } from './petri/types.js';
 
+// Orbits imports
+import { createOrbitsState, tickOrbits, type OrbitsState } from './orbits/simulation.js';
+import { OrbitsRenderer } from './orbits/renderer.js';
+import { OrbitsMusic } from './orbits/music.js';
+
 // --- State ---
 
-let currentView: 'synth' | 'petri' = 'petri';
+let currentView: 'synth' | 'petri' | 'orbits' = 'orbits';
 let initialized = false;
 
 // Synth
@@ -47,22 +52,40 @@ let petriAudio: PetriAudio;
 let petriControls: PetriControls;
 let petriRunning = false;
 
+// Orbits
+let orbitsState: OrbitsState;
+let orbitsRenderer: OrbitsRenderer;
+let orbitsMusic: OrbitsMusic;
+let orbitsRunning = false;
+
 function getTickInterval(): number {
   return Math.round(60000 / petriConfig.bpm / 2);
 }
 
 // --- View switching ---
 
-function showView(view: 'synth' | 'petri'): void {
+function showView(view: 'synth' | 'petri' | 'orbits'): void {
   currentView = view;
   document.getElementById('synth-view')!.classList.toggle('hidden', view !== 'synth');
   document.getElementById('petri-view')!.classList.toggle('hidden', view !== 'petri');
-  document.querySelectorAll('.nav-btn').forEach(btn => {
+  document.getElementById('orbits-view')!.classList.toggle('hidden', view !== 'orbits');
+  document.querySelectorAll('.nav-btn[data-view]').forEach(btn => {
     btn.classList.toggle('active', btn.getAttribute('data-view') === view);
   });
 
-  if (view === 'petri' && initialized && !petriRunning) {
-    startPetri();
+  // Stop audio for inactive views
+  if (view !== 'petri') petriRunning = false;
+  if (view !== 'orbits') orbitsRunning = false;
+
+  // Start audio for active view
+  if (view === 'petri' && initialized) {
+    petriRunning = true;
+    petriTick();
+    if (rebuildPetriBar) rebuildPetriBar();
+  }
+  if (view === 'orbits' && initialized) {
+    orbitsRunning = true;
+    orbitsTick();
   }
 }
 
@@ -78,12 +101,8 @@ function rebuildSynthUI() {
 
 let rebuildPetriBar: (() => void) | null = null;
 
-function startPetri() {
-  petriRunning = true;
+function initPetri() {
   seedOrganisms();
-  petriTick();
-  petriRenderLoop();
-  if (rebuildPetriBar) rebuildPetriBar();
 }
 
 function togglePetri() {
@@ -129,6 +148,28 @@ function seedOrganisms() {
   }
 }
 
+// --- Orbits ---
+
+
+function orbitsTick() {
+  if (!orbitsRunning) return;
+  // Music tick at BPM rate
+  orbitsMusic.tick(orbitsState, petriConfig.bpm);
+  setTimeout(orbitsTick, Math.round(60000 / petriConfig.bpm / 2));
+}
+
+function orbitsRenderLoop() {
+  if (currentView === 'orbits') {
+    // Simulation runs every frame — fixed timestep handled internally
+    if (orbitsRunning) {
+      tickOrbits(orbitsState, 0.5);
+    }
+    orbitsRenderer.resize();
+    orbitsRenderer.render(orbitsState, orbitsMusic.getCurrentChord());
+  }
+  requestAnimationFrame(orbitsRenderLoop);
+}
+
 // --- Init ---
 
 async function init() {
@@ -162,10 +203,20 @@ async function init() {
     rebuildSynthUI();
     setupKeyboard(document.getElementById('keyboard')!, n => synthEngine.noteOn(n), n => synthEngine.noteOff(n));
 
+    // Orbits
+    const orbitsContainer = document.getElementById('orbits-container')!;
+    orbitsState = createOrbitsState(800, 600);
+    orbitsRenderer = new OrbitsRenderer(orbitsContainer);
+    orbitsMusic = new OrbitsMusic();
+    orbitsMusic.setPresetSource(() => synthEngine.getAllPresets());
+    orbitsMusic.setBusSource(() => synthEngine.busEffects);
+    await orbitsMusic.start();
+
     // Petri — wire synth presets as audio source
     grid = createGrid(GRID_SIZE, GRID_SIZE);
     petriAudio = new PetriAudio();
     petriAudio.setPresetSource(() => synthEngine.getAllPresets());
+    petriAudio.setBusSource(() => synthEngine.busEffects);
     petriAudio.setMelodyConfig(melodyConfig);
     await petriAudio.start();
     const petriCanvas = document.getElementById('petri-canvas') as HTMLCanvasElement;
@@ -174,6 +225,7 @@ async function init() {
     const petriBar = document.getElementById('petri-bar')!;
     rebuildPetriBar = () => petriControls.buildBottomBar(petriBar, petriConfig, petriRunning, togglePetri);
     rebuildPetriBar();
+    initPetri();
 
     // Petri canvas interaction
     let painting = false;
@@ -194,27 +246,16 @@ async function init() {
     // Sidebar nav
     document.querySelectorAll('.nav-btn[data-view]').forEach(btn => {
       btn.addEventListener('click', () => {
-        const view = btn.getAttribute('data-view') as 'synth' | 'petri';
+        const view = btn.getAttribute('data-view') as 'synth' | 'petri' | 'orbits';
         if (view) showView(view);
       });
     });
 
-    // Melody sidecart toggle
-    const melodyPanel = document.getElementById('melody-panel')!;
-    const melodyBtn = document.getElementById('melody-toggle')!;
-    melodyBtn.addEventListener('click', () => {
-      // Switch to petri view if not already there
-      if (currentView !== 'petri') showView('petri');
-      // Toggle sidecart
-      const wasHidden = melodyPanel.classList.contains('hidden');
-      melodyPanel.classList.toggle('hidden');
-      melodyBtn.classList.toggle('active');
-      if (wasHidden) {
-        buildMelodyPanel(melodyPanel, melodyConfig, petriConfig, () => petriAudio.setMelodyConfig(melodyConfig));
-      }
-    });
+    // Melody sidecart — always visible
+    buildMelodyPanel(document.getElementById('melody-panel')!, melodyConfig, petriConfig, () => petriAudio.setMelodyConfig(melodyConfig));
 
-    showView('petri');
+    showView('orbits');
+    orbitsRenderLoop();
     petriRenderLoop();
   });
 }

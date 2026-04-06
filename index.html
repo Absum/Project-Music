@@ -96,6 +96,10 @@
       .key.black:hover { background: linear-gradient(180deg, #161a28 0%, #101420 100%); }
       .key.black.active { background: linear-gradient(180deg, rgba(65,158,199,0.12) 0%, rgba(65,158,199,0.06) 100%); }
 
+      /* ═══ ORBITS VIEW ═══ */
+      .orbits-area { flex: 1; position: relative; overflow: hidden; background: #08080e; }
+      .orbits-area canvas { display: block; }
+
       /* ═══ PETRI VIEW ═══ */
       .petri-middle { display: flex; flex: 1; overflow: hidden; }
       .petri-area { flex: 1; position: relative; overflow: hidden; }
@@ -121,9 +125,14 @@
     <div id="main-ui" class="hidden">
       <!-- Sidebar -->
       <div class="sidebar">
-        <button class="nav-btn active" data-view="petri" title="Petri Dish">&#9673;</button>
+        <button class="nav-btn active" data-view="orbits" title="Orbits">&#10022;</button>
+        <button class="nav-btn" data-view="petri" title="Petri Dish">&#9673;</button>
         <button class="nav-btn" data-view="synth" title="Synthesizer">&#9835;</button>
-        <button class="nav-btn" id="melody-toggle" title="Melody Settings">&#9881;</button>
+      </div>
+
+      <!-- Orbits View -->
+      <div id="orbits-view" class="view-container">
+        <div class="orbits-area" id="orbits-container"></div>
       </div>
 
       <!-- Synth View -->
@@ -144,12 +153,12 @@
       </div>
 
       <!-- Petri View -->
-      <div id="petri-view" class="view-container">
+      <div id="petri-view" class="view-container hidden">
         <div class="petri-middle">
           <div class="petri-area">
             <canvas id="petri-canvas"></canvas>
           </div>
-          <div id="melody-panel" class="melody-sidecart hidden"></div>
+          <div id="melody-panel" class="melody-sidecart"></div>
         </div>
         <div id="petri-bar"></div>
       </div>
