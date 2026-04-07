@@ -1,4 +1,5 @@
 import type { AudioBus } from '../audio/bus.js';
+import type { SynthEngine } from '../audio/engine.js';
 import { createKnob } from '../ui/knob.js';
 
 // Display order: KICK, BASS, PAD, LEAD, ARP → preset indices 4, 0, 1, 2, 3
@@ -9,13 +10,15 @@ const CHANNEL_NAMES = ['KICK', 'BASS', 'PAD', 'LEAD', 'ARP'];
 export class Mixer {
   private container: HTMLElement;
   private bus: AudioBus;
+  private engine: SynthEngine;
   private masterCanvas: HTMLCanvasElement | null = null;
   private masterCtx: CanvasRenderingContext2D | null = null;
   private animFrame = 0;
 
-  constructor(container: HTMLElement, bus: AudioBus) {
+  constructor(container: HTMLElement, bus: AudioBus, engine: SynthEngine) {
     this.container = container;
     this.bus = bus;
+    this.engine = engine;
     this.build();
     this.startAnimation();
   }
@@ -29,9 +32,12 @@ export class Mixer {
     const strips = document.createElement('div');
     strips.className = 'mixer-strips';
 
+    const presets = this.engine.getAllPresets();
+
     for (let ch = 0; ch < 5; ch++) {
       const presetIdx = CHANNEL_ORDER[ch];
       const cs = this.bus.channelStates[presetIdx];
+      const preset = presets[presetIdx];
       const strip = document.createElement('div');
       strip.className = 'mixer-strip';
 
@@ -55,7 +61,7 @@ export class Mixer {
       const filterRow = document.createElement('div');
       filterRow.className = 'strip-knob-row';
       createKnob(filterRow, {
-        label: 'FILTER', value: 3000, min: 100, max: 16000, step: 10, unit: 'Hz', size: 38,
+        label: 'FILTER', value: preset?.filterCutoff ?? 3000, min: 100, max: 16000, step: 10, unit: 'Hz', size: 38,
         onChange: v => this.bus.setChannelFilter(presetIdx, v),
       });
       strip.appendChild(filterRow);
@@ -64,7 +70,7 @@ export class Mixer {
       const sendRow = document.createElement('div');
       sendRow.className = 'strip-knob-row';
       createKnob(sendRow, {
-        label: 'SEND', value: 0, min: 0, max: 1, step: 0.01, size: 38,
+        label: 'SEND', value: preset?.busSend ?? 0, min: 0, max: 1, step: 0.01, size: 38,
         onChange: v => this.bus.setChannelSend(presetIdx, v),
       });
       strip.appendChild(sendRow);

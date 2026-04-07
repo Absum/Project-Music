@@ -1,5 +1,5 @@
 import * as Tone from 'tone';
-import type { SynthPreset, FxSlot } from './presets.js';
+import { PRESETS, type SynthPreset, type FxSlot } from './presets.js';
 import { getFxDef } from './fx-registry.js';
 
 export interface ChannelState {
@@ -79,13 +79,17 @@ export class AudioBus {
     this.busReturn.connect(this.masterGain);
     this.rebuildBusEffects();
 
-    // Create 5 channels
+    // Create 5 channels — restore any muted presets from stale localStorage
     const presets = this.getPresets?.() ?? [];
+    const { PRESETS } = await import('./presets.js');
     for (let i = 0; i < 5; i++) {
       const preset = presets[i];
-      const vol = preset?.volume ?? -16;
+      if (preset && preset.volume <= -99) {
+        preset.volume = PRESETS[i].volume;
+      }
+      const vol = preset?.volume ?? PRESETS[i].volume;
       this.channelStates.push({ muted: false, solo: false, savedVolume: vol });
-      this.channels.push(this.buildChannel(preset));
+      this.channels.push(this.buildChannel(preset, i));
     }
 
     this.initialized = true;
@@ -179,8 +183,8 @@ export class AudioBus {
             ch.synth.volume.rampTo(preset.volume, 0.1);
           }
           ch.filter.frequency.rampTo(preset.filterCutoff, 0.1);
-          ch.filter.Q.rampTo(preset.filterQ ?? 1, 0.1);
-          ch.sendGain.gain.rampTo(preset.busSend ?? 0, 0.1);
+          ch.filter.Q.rampTo(preset.filterQ, 0.1);
+          ch.sendGain.gain.rampTo(preset.busSend, 0.1);
 
           const env = ch.synth.envelope as unknown as Record<string, unknown>;
           env.attack = preset.envelope.attack;
@@ -205,28 +209,29 @@ export class AudioBus {
 
   // --- Internal ---
 
-  private buildChannel(preset: SynthPreset | undefined): Channel {
-    const p = preset;
+  private buildChannel(preset: SynthPreset | undefined, index = 0): Channel {
+    // Use preset if available, fall back to factory PRESETS
+    const p = preset ?? PRESETS[index];
 
     const filter = new Tone.Filter({
-      frequency: p?.filterCutoff ?? 3000,
-      type: (p?.filterType ?? 'lowpass') as BiquadFilterType,
-      Q: p?.filterQ ?? 1,
-      rolloff: (p?.filterRolloff ?? -12) as Tone.FilterRollOff,
+      frequency: p.filterCutoff,
+      type: p.filterType as BiquadFilterType,
+      Q: p.filterQ,
+      rolloff: p.filterRolloff as Tone.FilterRollOff,
     });
 
-    const isFat = p?.oscType?.startsWith('fat');
-    const oscOptions: Record<string, unknown> = { type: p?.oscType ?? 'sine' };
-    if (isFat && p) { oscOptions.spread = p.spread; oscOptions.count = p.count; }
+    const isFat = p.oscType.startsWith('fat');
+    const oscOptions: Record<string, unknown> = { type: p.oscType };
+    if (isFat) { oscOptions.spread = p.spread; oscOptions.count = p.count; }
 
     const synth = new Tone.FMSynth({
-      harmonicity: p?.harmonicity ?? 1,
-      modulationIndex: p?.modulationIndex ?? 2,
+      harmonicity: p.harmonicity,
+      modulationIndex: p.modulationIndex,
       oscillator: oscOptions as Tone.FMSynthOptions['oscillator'],
-      modulation: { type: (p?.modWaveform ?? 'sine') as OscillatorType } as Tone.FMSynthOptions['modulation'],
-      envelope: p?.envelope ?? { attack: 0.05, decay: 0.2, sustain: 0.4, release: 0.5 },
-      modulationEnvelope: p?.modEnvelope ?? { attack: 0.05, decay: 0.2, sustain: 0.3, release: 0.3 },
-      volume: p?.volume ?? -16,
+      modulation: { type: p.modWaveform as OscillatorType } as Tone.FMSynthOptions['modulation'],
+      envelope: p.envelope,
+      modulationEnvelope: p.modEnvelope,
+      volume: p.volume,
     });
 
     synth.connect(filter);
@@ -244,7 +249,7 @@ export class AudioBus {
 
     const panner = new Tone.Panner(0);
     const channelGain = new Tone.Gain(1);
-    const sendGain = new Tone.Gain(p?.busSend ?? 0);
+    const sendGain = new Tone.Gain(p.busSend);
 
     // Chain: synth → filter → [effects] → panner + sendGain
     let prev: Tone.ToneAudioNode = filter;
@@ -281,7 +286,7 @@ export class AudioBus {
     old.sendGain.dispose();
     for (const n of old.fxNodes) n.dispose();
 
-    this.channels[index] = this.buildChannel(preset);
+    this.channels[index] = this.buildChannel(preset, index);
 
     // Re-apply mute state
     const cs = this.channelStates[index];

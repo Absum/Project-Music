@@ -1,7 +1,8 @@
 import * as Tone from 'tone';
 
-// Audio bus
+// Audio bus + melody
 import { AudioBus } from './audio/bus.js';
+import { MelodyEngine } from './audio/melody.js';
 
 // Synth imports
 import { SynthEngine } from './audio/engine.js';
@@ -33,7 +34,7 @@ import { TidesMusic } from './tides/music.js';
 let currentView: 'synth' | 'petri' | 'orbits' | 'tides' = 'tides';
 let initialized = false;
 
-// Shared audio bus
+// Shared audio bus + melody engine
 const audioBus = new AudioBus();
 
 // Synth
@@ -58,6 +59,7 @@ const melodyConfig: MelodyConfig = {
   kickDensity: 2, kickPitch: 'C2',
   maxNotesPerSpecies: 1, masterVolume: -7,
 };
+const melodyEngine = new MelodyEngine(melodyConfig);
 let grid: GridState;
 let petriRenderer: PetriRenderer;
 let petriAudio: PetriAudio;
@@ -215,6 +217,8 @@ function orbitsRenderLoop() {
 function tidesTick() {
   if (!tidesRunning) return;
   audioBus.syncPresets();
+  // Tick the simulation here too so music has fresh data
+  tickTides(tidesState, 0.05);
   tidesMusic.tick(tidesState);
   setTimeout(tidesTick, Math.round(60000 / petriConfig.bpm / 2));
 }
@@ -268,7 +272,7 @@ async function init() {
 
     // Mixer — toggle via button in preset bar
     const mixerPanel = document.getElementById('mixer-panel')!;
-    new Mixer(mixerPanel, audioBus);
+    new Mixer(mixerPanel, audioBus, synthEngine);
 
     const mixerBtn = document.createElement('button');
     mixerBtn.className = 'preset-btn mixer-toggle-btn';
@@ -281,19 +285,20 @@ async function init() {
 
     // Orbits — lazy init (container needs to be visible for sizing)
     orbitsState = createOrbitsState(800, 600);
-    orbitsMusic = new OrbitsMusic(audioBus);
+    orbitsMusic = new OrbitsMusic(audioBus, melodyEngine);
 
     // Tides
     tidesState = createTidesState();
     const tidesContainer = document.getElementById('tides-container')!;
     tidesRenderer = new TidesRenderer(tidesContainer);
-    tidesMusic = new TidesMusic(audioBus);
+    tidesMusic = new TidesMusic(audioBus, melodyEngine);
     tidesRenderLoop();
 
     // Petri — wire synth presets as audio source
     grid = createGrid(GRID_SIZE, GRID_SIZE);
-    petriAudio = new PetriAudio(audioBus);
-    petriAudio.setMelodyConfig(melodyConfig);
+    petriAudio = new PetriAudio(audioBus, melodyEngine);
+    melodyEngine.updateConfig(melodyConfig);
+    petriAudio.rebuildPitchMap();
     await petriAudio.start(); // still needed for collision noise synth
     const petriCanvas = document.getElementById('petri-canvas') as HTMLCanvasElement;
     petriRenderer = new PetriRenderer(petriCanvas);
@@ -328,7 +333,10 @@ async function init() {
     });
 
     // Melody sidecart — always visible
-    buildMelodyPanel(document.getElementById('melody-panel')!, melodyConfig, petriConfig, () => petriAudio.setMelodyConfig(melodyConfig));
+    buildMelodyPanel(document.getElementById('melody-panel')!, melodyConfig, petriConfig, () => {
+      melodyEngine.updateConfig(melodyConfig);
+      petriAudio.rebuildPitchMap();
+    });
 
     showView('tides');
     orbitsRenderLoop();

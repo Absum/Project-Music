@@ -1,20 +1,13 @@
-import type { GridState, SimulationEvent, CollisionConfig, MelodyConfig, NoteDuration } from '../types.js';
+import type { GridState, SimulationEvent, CollisionConfig } from '../types.js';
 import type { AudioBus } from '../../audio/bus.js';
-import { buildPitchMap } from './scales.js';
+import type { MelodyEngine } from '../../audio/melody.js';
 import * as Tone from 'tone';
 
 const SPECIES_TO_PRESET = [1, 2, 0, 3]; // Oscillaris→PAD, Sawtonis→LEAD, Quadrus→BASS, Triangula→ARP
 
-const DEFAULT_MELODY_CONFIG: MelodyConfig = {
-  rootNote: 'C', scaleType: 'minorPentatonic',
-  octaveLow: 2, octaveHigh: 5,
-  speciesDuration: ['4n', '8n', '8n', '16n'],
-  kickDensity: 2, kickPitch: 'C2',
-  maxNotesPerSpecies: 1, masterVolume: -7,
-};
-
 export class AudioEngine {
   private bus: AudioBus;
+  private melody: MelodyEngine;
 
   // Collision noise (not a preset — separate sound)
   private noiseSynth!: Tone.NoiseSynth;
@@ -26,22 +19,20 @@ export class AudioEngine {
   // Playhead
   private _playheadCol = 0;
   private initialized = false;
-
-  // Melody config
-  private melodyConfig: MelodyConfig = { ...DEFAULT_MELODY_CONFIG, speciesDuration: [...DEFAULT_MELODY_CONFIG.speciesDuration] };
-  private pitchMap: string[] = buildPitchMap('C', 'minorPentatonic', 2, 5, 32);
+  private pitchMap: string[] = [];
 
   get playheadCol(): number { return this._playheadCol; }
 
-  constructor(bus: AudioBus) {
+  constructor(bus: AudioBus, melody: MelodyEngine) {
     this.bus = bus;
+    this.melody = melody;
+    this.rebuildPitchMap();
   }
 
   async start(): Promise<void> {
     if (this.initialized) return;
     await Tone.start();
 
-    // Collision noise — not a preset, connects directly to destination
     this.noisePanner = new Tone.Panner(0);
     this.noiseFilter = new Tone.Filter(4000, 'lowpass');
     this.noiseSynth = new Tone.NoiseSynth({
@@ -56,9 +47,8 @@ export class AudioEngine {
     this.initialized = true;
   }
 
-  setMelodyConfig(config: MelodyConfig): void {
-    this.melodyConfig = config;
-    this.pitchMap = buildPitchMap(config.rootNote, config.scaleType, config.octaveLow, config.octaveHigh, 32);
+  rebuildPitchMap(): void {
+    this.pitchMap = this.melody.buildPitchMap(32);
   }
 
   syncCollisionConfig(c: CollisionConfig): void {
@@ -101,6 +91,7 @@ export class AudioEngine {
 
     const col = this._playheadCol;
     const gw = grid.width;
+    const config = this.melody.getConfig();
 
     // Scan current column
     const hits: { species: number; row: number; energy: number }[] = [];
@@ -114,11 +105,11 @@ export class AudioEngine {
     for (let y = 0; y < grid.height; y++) {
       for (let x = 0; x < gw; x++) { if (grid.cells[y][x].organism) totalOrgs++; }
     }
-    if (totalOrgs > 0 && col % this.melodyConfig.kickDensity === 0) {
-      this.bus.play(4, this.melodyConfig.kickPitch, '8n');
+    if (totalOrgs > 0 && col % this.melody.getKickDensity() === 0) {
+      this.bus.play(4, this.melody.getKickPitch(), '8n');
     }
 
-    // Spatial panning from species centroid
+    // Spatial panning
     const gh = grid.height;
     for (let s = 0; s < 4; s++) {
       let cx = 0, count = 0;
@@ -129,8 +120,7 @@ export class AudioEngine {
         }
       }
       if (count > 0) {
-        const pan = (cx / count / gw) * 2 - 1;
-        this.bus.setChannelPan(SPECIES_TO_PRESET[s], pan);
+        this.bus.setChannelPan(SPECIES_TO_PRESET[s], (cx / count / gw) * 2 - 1);
       }
     }
 
@@ -145,21 +135,17 @@ export class AudioEngine {
 
       for (const [species, orgHits] of bySpecies) {
         const presetIdx = SPECIES_TO_PRESET[species];
-        const sorted = orgHits.sort((a, b) => b.energy - a.energy).slice(0, this.melodyConfig.maxNotesPerSpecies);
+        const maxNotes = config.maxNotesPerSpecies;
+        const sorted = orgHits.sort((a, b) => b.energy - a.energy).slice(0, maxNotes);
         for (const hit of sorted) {
-          const pitch = this.rowToPitch(hit.row, grid.height);
-          const duration = this.melodyConfig.speciesDuration[species] as NoteDuration;
+          const pitch = this.pitchMap[Math.min(hit.row, this.pitchMap.length - 1)] ?? 'C3';
+          const duration = this.melody.getDuration(presetIdx);
           this.bus.play(presetIdx, pitch, duration);
         }
       }
     }
 
     this._playheadCol = (col + 1) % gw;
-  }
-
-  private rowToPitch(row: number, gridHeight: number): string {
-    const index = Math.floor((row / gridHeight) * this.pitchMap.length);
-    return this.pitchMap[Math.min(index, this.pitchMap.length - 1)];
   }
 
   dispose(): void {
